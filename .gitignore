@@ -1,0 +1,5 @@
+/parallaxd
+/parallaxd-probe
+*.db
+*.db-wal
+*.db-shm
