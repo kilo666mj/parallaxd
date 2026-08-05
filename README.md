@@ -112,8 +112,8 @@ A coordinator with probers, not peer-to-peer consensus.
 Peer-to-peer sounds better and is where these projects die — leader election,
 split brain, and eventually a worse Raft. A coordinator being down is a
 monitoring gap rather than an outage: probers keep probing and nothing alerts.
-That needs a dead-man's switch, which has to be answered deliberately rather
-than by accident.
+That is what [the dead-man's switch](#the-dead-mans-switch) exists to make
+noticeable.
 
 ## Both directions are signed
 
