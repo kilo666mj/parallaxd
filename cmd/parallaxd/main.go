@@ -49,9 +49,29 @@ type config struct {
 	Webhook        string            `json:"webhook,omitempty"`
 	WebhookHeaders map[string]string `json:"webhook_headers,omitempty"`
 
+	// Heartbeat is the outward dead-man's switch. Without it nothing outside
+	// the fleet notices if this coordinator dies, and the resulting silence
+	// looks exactly like everything being fine.
+	Heartbeat heartbeatConfig `json:"heartbeat,omitempty"`
+
+	// StaleMultiplier and StaleGrace decide how late a check may be before
+	// nobody is considered to be watching it: interval*multiplier + grace.
+	StaleMultiplier int      `json:"stale_multiplier,omitempty"`
+	StaleGrace      duration `json:"stale_grace,omitempty"`
+	WatchInterval   duration `json:"watch_interval,omitempty"`
+
 	FanOutTimeout duration `json:"fan_out_timeout,omitempty"`
 	RequestTTL    duration `json:"request_ttl,omitempty"`
 	ResultMaxAge  duration `json:"result_max_age,omitempty"`
+}
+
+type heartbeatConfig struct {
+	// URL must point off the fleet — a hosted cron-ping service, or anything
+	// that alerts when an expected ping does not arrive. A watcher inside the
+	// fleet cannot report the fleet being unreachable.
+	URL      string            `json:"url"`
+	Interval duration          `json:"interval,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
 }
 
 type proberConfig struct {
@@ -184,12 +204,20 @@ func run(configPath string, log *slog.Logger) error {
 
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
-		Components:    cfg.Components,
-		Notifier:      notifier,
-		FanOutTimeout: time.Duration(cfg.FanOutTimeout),
-		RequestTTL:    time.Duration(cfg.RequestTTL),
-		ResultMaxAge:  time.Duration(cfg.ResultMaxAge),
-		Logger:        log,
+		Components: cfg.Components,
+		Notifier:   notifier,
+		Heartbeat: coordinator.Heartbeat{
+			URL:      cfg.Heartbeat.URL,
+			Interval: time.Duration(cfg.Heartbeat.Interval),
+			Headers:  cfg.Heartbeat.Headers,
+		},
+		StaleMultiplier: cfg.StaleMultiplier,
+		StaleGrace:      time.Duration(cfg.StaleGrace),
+		WatchInterval:   time.Duration(cfg.WatchInterval),
+		FanOutTimeout:   time.Duration(cfg.FanOutTimeout),
+		RequestTTL:      time.Duration(cfg.RequestTTL),
+		ResultMaxAge:    time.Duration(cfg.ResultMaxAge),
+		Logger:          log,
 	})
 	if err != nil {
 		return err
@@ -197,6 +225,15 @@ func run(configPath string, log *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// The dead-man's switch: an outward heartbeat so something off the fleet
+	// notices if this dies, and an inward watch so a prober that goes quiet is
+	// reported rather than silently stopping its checks.
+	watchdogDone := make(chan struct{})
+	go func() {
+		defer close(watchdogDone)
+		c.Run(ctx)
+	}()
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -231,6 +268,7 @@ func run(configPath string, log *slog.Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	<-watchdogDone
 	// A verdict already being worked on gets to finish and be delivered,
 	// rather than being abandoned halfway through an alert.
 	c.Wait()

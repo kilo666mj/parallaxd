@@ -112,8 +112,8 @@ A coordinator with probers, not peer-to-peer consensus.
 Peer-to-peer sounds better and is where these projects die — leader election,
 split brain, and eventually a worse Raft. A coordinator being down is a
 monitoring gap rather than an outage: probers keep probing and nothing alerts.
-That needs a dead-man's switch, which has to be answered deliberately rather
-than by accident.
+That is what [the dead-man's switch](#the-dead-mans-switch) exists to make
+noticeable.
 
 ## Both directions are signed
 
@@ -307,6 +307,79 @@ than being silently read as healthy. The exception is a rollup already
 satisfied: one failing check under `any` takes the component down whether or
 not the others have reported.
 
+## The dead-man's switch
+
+A monitoring system's worst failure is not a wrong answer, it is no answer.
+Everything above alerts when a check *fails*; without this, nothing alerts when
+a check stops *happening* — and silence is indistinguishable from health.
+
+Two mechanisms, deliberately separate. They answer different questions, and
+conflating them makes both diagnoses ambiguous.
+
+### Outward: is the coordinator alive?
+
+```json
+"heartbeat": {
+  "url": "https://hc-ping.example/uuid",
+  "interval": "1m",
+  "headers": {"Authorization": "Bearer ..."}
+}
+```
+
+The coordinator POSTs to that URL on every interval. If it dies, the pings stop
+and the external service alerts. **The URL must point off the fleet** — a
+watcher inside it cannot report the fleet being unreachable, which is exactly
+the case that matters.
+
+The ping is **gated on the coordinator being able to read its own state**, not
+on the process still existing. A goroutine that pings on a timer proves only
+that the scheduler is running, which is the least interesting way a coordinator
+fails; a wedged one still ticks. Building the state document first means the
+ping traverses the same locks every verdict traverses, so a coordinator
+deadlocked in evaluation stops beating and the external watcher fires.
+
+A failed ping is logged, never alerted. A coordinator that alerted about its own
+heartbeat would be claiming to report on its own death.
+
+Starting without a heartbeat URL logs a warning rather than defaulting quietly.
+Running with no external watcher is the single point of failure this design has
+always named, and an operator should know they are running that way.
+
+### Inward: is anyone still reporting?
+
+A prober that dies quietly takes its checks with it, and those checks simply
+stop being evaluated. The coordinator watches for that:
+
+```
+stale after = interval × stale_multiplier + stale_grace   (default 3 and 30s)
+```
+
+A multiple of the interval rather than a fixed threshold, because a check that
+runs every 30 seconds and one that runs hourly have very different ideas of
+"late". A check that has never reported counts from process start, so a restart
+does not alert on everything at once.
+
+**A stale check becomes `unknown`, never `down`.** Nobody probed the target, so
+there is no evidence about it, and calling it down would mean a prober rebooting
+pages as an outage of the service it was watching.
+
+Staleness is tracked as a **flag alongside** the last verdict rather than
+overwriting it. Two different facts — what was last decided, and whether anyone
+is still looking — and collapsing them means a check that was already failing
+when its prober died announces itself as a brand new outage when the prober
+comes back. Readers see `unknown` either way; `last_known` carries the last
+thing actually observed.
+
+Alerts are **grouped by the responsible prober**, because the usual cause is one
+prober dying and taking a dozen checks with it:
+
+```
+SILENT prober probe-c — no results for 4m30s; these checks are not being run: dns, mail, svc
+```
+
+Once, not per tick, and the return transition alerts too — otherwise an operator
+is left watching an alert that never closes.
+
 ## Status export
 
 parallaxd exports the state a status page is built from. **It does not host
@@ -324,7 +397,8 @@ GET /v1/export?signed=true  the same document in a signed envelope
 GET /v1/components          just the component view
 ```
 
-The document carries components, the checks behind them, and `generated_at`.
+The document carries components, the checks behind them (each with `stale` and
+`last_known` so a page can show what nobody is watching), and `generated_at`.
 **A renderer must check that timestamp against its own clock.** A page built
 from an export the coordinator stopped producing an hour ago shows everything
 exactly as it was, which is worse than showing nothing — and staleness is the
