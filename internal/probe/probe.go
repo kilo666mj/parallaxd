@@ -162,12 +162,15 @@ type TCP struct {
 	// Dialer is used for every connection. Callers override it to bind a
 	// source address, which is how a prober offers a specific vantage.
 	Dialer *net.Dialer
+
+	// Policy constrains where this prober may connect.
+	Policy Policy
 }
 
 func (TCP) Kind() check.Kind { return check.KindTCP }
 
 func (t TCP) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
-	d := guardedDialer(c.Vantage, t.Dialer)
+	d := guardedDialer(c.Vantage, t.Policy, t.Dialer)
 	start := time.Now()
 	conn, err := d.DialContext(ctx, "tcp", c.Target)
 	latency := time.Since(start)
@@ -182,8 +185,12 @@ func (t TCP) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 // HTTP probes by making a request and checking the response.
 type HTTP struct {
 	// Client is used for every request. Callers override it to control the
-	// transport — source address, proxy, TLS settings.
+	// transport — source address, proxy, TLS settings. A caller that supplies
+	// one owns enforcing Policy in its transport.
 	Client *http.Client
+
+	// Policy constrains where this prober may connect.
+	Policy Policy
 }
 
 func (HTTP) Kind() check.Kind { return check.KindHTTP }
@@ -205,7 +212,7 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 			Jar:           client.Jar,
 			Timeout:       client.Timeout,
 			Transport: &http.Transport{
-				DialContext:           guardedDialer(c.Vantage, nil).DialContext,
+				DialContext:           guardedDialer(c.Vantage, h.Policy, nil).DialContext,
 				ForceAttemptHTTP2:     true,
 				MaxIdleConnsPerHost:   1,
 				TLSHandshakeTimeout:   10 * time.Second,
