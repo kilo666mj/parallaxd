@@ -41,6 +41,10 @@ type config struct {
 	Probers []proberConfig `json:"probers"`
 	Checks  []checkConfig  `json:"checks"`
 
+	// Components group checks into the services a person recognises. Optional:
+	// a check in no component alerts on its own, exactly as before.
+	Components []check.Component `json:"components,omitempty"`
+
 	// Webhook, when set, receives every alert as JSON in addition to the log.
 	Webhook        string            `json:"webhook,omitempty"`
 	WebhookHeaders map[string]string `json:"webhook_headers,omitempty"`
@@ -180,6 +184,7 @@ func run(configPath string, log *slog.Logger) error {
 
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
+		Components:    cfg.Components,
 		Notifier:      notifier,
 		FanOutTimeout: time.Duration(cfg.FanOutTimeout),
 		RequestTTL:    time.Duration(cfg.RequestTTL),
@@ -204,7 +209,8 @@ func run(configPath string, log *slog.Logger) error {
 	errs := make(chan error, 1)
 	go func() {
 		log.Info("listening", "addr", cfg.Listen, "coordinator", cfg.Name,
-			"probers", len(peers), "checks", len(checks), "version", version)
+			"probers", len(peers), "checks", len(checks),
+			"components", len(cfg.Components), "version", version)
 		for prober, assigned := range c.Assignments() {
 			log.Info("assignment", "prober", prober, "checks", assigned)
 		}

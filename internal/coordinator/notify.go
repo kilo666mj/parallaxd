@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kilo666mj/parallaxd/internal/check"
 	"github.com/kilo666mj/parallaxd/internal/quorum"
 )
 
@@ -24,29 +25,77 @@ const (
 	KindRecovered Kind = "recovered"
 )
 
-// Alert is one thing worth telling someone about.
+// Alert is one thing worth telling someone about — either a single check, or a
+// component built from several.
 //
-// It carries the whole verdict rather than a status string. An alert that
-// cannot say "3 of 5 across three providers, 2 still reported up" leaves the
-// reader to go and find that out, and the entire point of corroborating is
+// A check alert carries the whole verdict rather than a status string. An alert
+// that cannot say "3 of 5 across three providers, 2 still reported up" leaves
+// the reader to go and find that out, and the entire point of corroborating is
 // that the strength of the agreement is part of the finding.
 type Alert struct {
-	Check   string         `json:"check"`
-	Target  string         `json:"target"`
-	Kind    Kind           `json:"kind"`
-	At      time.Time      `json:"at"`
-	Verdict quorum.Verdict `json:"verdict"`
+	// Component is set when this alert is about a group of checks. Check and
+	// Target are then empty and Members carries the per-check detail, which is
+	// what keeps a grouped alert as specific as the ungrouped ones it replaces.
+	Component string   `json:"component,omitempty"`
+	Members   []Member `json:"members,omitempty"`
+
+	Check  string `json:"check,omitempty"`
+	Target string `json:"target,omitempty"`
+
+	// Detail is free text from the configuration — a component's description.
+	Detail string `json:"detail,omitempty"`
+
+	Kind Kind      `json:"kind"`
+	At   time.Time `json:"at"`
+
+	// Verdict is the corroboration detail, and is only meaningful on a check
+	// alert: a component has no probers of its own to agree or dissent.
+	Verdict quorum.Verdict `json:"verdict,omitzero"`
+}
+
+// Member is one check's contribution to a component alert.
+type Member struct {
+	Check  string `json:"check"`
+	Target string `json:"target,omitempty"`
+	Status string `json:"status"`
+}
+
+// Subject is what the alert is about, for a reader who does not care which
+// layer produced it.
+func (a Alert) Subject() string {
+	if a.Component != "" {
+		return a.Component
+	}
+	return a.Check
 }
 
 // Summary renders the alert as one line.
 func (a Alert) Summary() string {
 	var b strings.Builder
-	switch a.Kind {
-	case KindRecovered:
-		fmt.Fprintf(&b, "RECOVERED %s (%s)", a.Check, a.Target)
-	default:
-		fmt.Fprintf(&b, "DOWN %s (%s)", a.Check, a.Target)
+	verb := "DOWN"
+	if a.Kind == KindRecovered {
+		verb = "RECOVERED"
 	}
+
+	if a.Component != "" {
+		fmt.Fprintf(&b, "%s %s", verb, a.Component)
+		// Naming the members that failed is what stops a component alert being
+		// vaguer than the check alerts it replaced.
+		var failing []string
+		for _, m := range a.Members {
+			if m.Status == string(check.StatusDown) {
+				failing = append(failing, m.Check)
+			}
+		}
+		if len(failing) > 0 {
+			fmt.Fprintf(&b, " — %s", strings.Join(failing, ", "))
+		} else if a.Detail != "" {
+			fmt.Fprintf(&b, " — %s", a.Detail)
+		}
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "%s %s (%s)", verb, a.Check, a.Target)
 	if a.Verdict.Reason != "" {
 		fmt.Fprintf(&b, " — %s", a.Verdict.Reason)
 	}
@@ -78,13 +127,18 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 	if log == nil {
 		log = slog.Default()
 	}
-	attrs := []any{
-		"check", a.Check, "target", a.Target, "kind", string(a.Kind),
-		"down", a.Verdict.Down, "up", a.Verdict.Up, "unknown", a.Verdict.Unknown,
-		"providers", a.Verdict.Providers,
-	}
-	if len(a.Verdict.Dissent) > 0 {
-		attrs = append(attrs, "dissent", a.Verdict.Dissent)
+	var attrs []any
+	if a.Component != "" {
+		attrs = []any{"component", a.Component, "kind", string(a.Kind)}
+	} else {
+		attrs = []any{
+			"check", a.Check, "target", a.Target, "kind", string(a.Kind),
+			"down", a.Verdict.Down, "up", a.Verdict.Up, "unknown", a.Verdict.Unknown,
+			"providers", a.Verdict.Providers,
+		}
+		if len(a.Verdict.Dissent) > 0 {
+			attrs = append(attrs, "dissent", a.Verdict.Dissent)
+		}
 	}
 	// Recovery at info, failure at warn: an operator filtering for problems
 	// should not have to read the good news to find the bad.

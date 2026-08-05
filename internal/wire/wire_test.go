@@ -369,3 +369,73 @@ func TestOversizedPayloadIsRefused(t *testing.T) {
 		t.Errorf("err = %v, want ErrPayloadTooLarge on the request path", err)
 	}
 }
+
+func TestDocumentSigning(t *testing.T) {
+	pub, priv, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ring := NewKeyring()
+	if err := ring.Add("coordinator", pub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	doc := map[string]any{"components": []string{"email"}}
+	env, err := SignDocument(priv, "coordinator", doc)
+	if err != nil {
+		t.Fatalf("SignDocument: %v", err)
+	}
+
+	raw, err := ring.OpenDocument(env)
+	if err != nil {
+		t.Fatalf("OpenDocument: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("decoded = %v", got)
+	}
+
+	if _, err := SignDocument(priv, "", doc); err == nil {
+		t.Error("SignDocument accepted an empty publisher")
+	}
+}
+
+// A document must not verify as a request. Otherwise a published export —
+// which is world-readable by design — could be replayed at a prober as an
+// instruction to connect somewhere.
+func TestDocumentIsDomainSeparated(t *testing.T) {
+	pub, priv, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ring := NewKeyring()
+	if err := ring.Add("coordinator", pub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	env, err := SignDocument(priv, "coordinator", map[string]string{"x": "y"})
+	if err != nil {
+		t.Fatalf("SignDocument: %v", err)
+	}
+	if _, err := ring.OpenRequest(env, time.Now()); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("OpenRequest on a document = %v, want %v", err, ErrBadSignature)
+	}
+	if _, err := ring.OpenResult(env, time.Now()); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("OpenResult on a document = %v, want %v", err, ErrBadSignature)
+	}
+
+	// And the reverse: a signed request must not pass as a published document.
+	id, _ := NewRequestID()
+	req, err := SignRequest(priv, "coordinator", Request{
+		ID: id, Check: testCheck(), IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("SignRequest: %v", err)
+	}
+	if _, err := ring.OpenDocument(req); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("OpenDocument on a request = %v, want %v", err, ErrBadSignature)
+	}
+}
