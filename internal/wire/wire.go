@@ -38,6 +38,7 @@ import (
 const (
 	domainResult  = "parallaxd/result/v1\x00"
 	domainRequest = "parallaxd/request/v1\x00"
+	domainDoc     = "parallaxd/document/v1\x00"
 )
 
 // maxClockSkew bounds how far in the future a signed message may claim to be.
@@ -235,6 +236,36 @@ func (k *Keyring) OpenRequest(e Envelope, now time.Time) (Request, error) {
 		return Request{}, fmt.Errorf("request carries an invalid check: %w", err)
 	}
 	return r, nil
+}
+
+// SignDocument signs something the coordinator publishes rather than sends to
+// a peer — currently the status export.
+//
+// It stays generic on purpose. A published document travels off the fleet to
+// whatever renders it, and the renderer should not have to import the
+// coordinator's types to check that the bytes are authentic. Verification and
+// interpretation are separate steps: OpenDocument answers "did the coordinator
+// write this", and the caller decides what it means.
+func SignDocument(priv ed25519.PrivateKey, publisher string, doc any) (Envelope, error) {
+	if publisher == "" {
+		return Envelope{}, errors.New("publisher name is required")
+	}
+	return seal(priv, domainDoc, publisher, doc)
+}
+
+// OpenDocument verifies a published document and returns its payload for the
+// caller to decode.
+//
+// There is no expiry check here because a document has no single timestamp
+// field this package can name. Staleness is the reader's concern and a real
+// one: a status page rendered from an export the coordinator stopped producing
+// an hour ago shows everything as it was, which is worse than showing nothing.
+// Whatever renders an export must check its own freshness field.
+func (k *Keyring) OpenDocument(e Envelope) (json.RawMessage, error) {
+	if err := k.verify(domainDoc, e); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(e.Payload), nil
 }
 
 // NewRequestID returns a random nonce.

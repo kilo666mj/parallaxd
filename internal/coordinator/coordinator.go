@@ -87,6 +87,11 @@ type Config struct {
 	Peers  []Peer
 	Checks []check.Check
 
+	// Components group checks into the services a person recognises. A check
+	// that belongs to one alerts through it rather than on its own, which is
+	// the difference between four alerts and one that says "email is down".
+	Components []check.Component
+
 	// Notifier receives alerts. Nil means log only.
 	Notifier Notifier
 
@@ -114,23 +119,29 @@ type Coordinator struct {
 	client *http.Client
 	now    func() time.Time
 
+	// componentsFor maps a check name to the components containing it, so a
+	// result only re-evaluates the groupings it can actually affect.
+	componentsFor map[string][]check.Component
+
 	// slots bounds concurrent fan-outs.
 	slots chan struct{}
 
-	mu     sync.Mutex
-	states map[string]*checkState
+	mu              sync.Mutex
+	states          map[string]*entityState
+	componentStates map[string]*entityState
 
 	// inflight tracks background processing so shutdown can wait for a
 	// verdict to finish rather than abandoning it half-delivered.
 	inflight sync.WaitGroup
 }
 
-// checkState is what the coordinator remembers about one check.
+// entityState is what the coordinator remembers about one thing it reports on
+// — a check, or a component built from several.
 //
 // Its own mutex, held across evaluation, so two results for the same check
 // cannot both decide it is newly down and alert twice. Different checks do
 // not contend.
-type checkState struct {
+type entityState struct {
 	mu sync.Mutex
 
 	// status is the last decided verdict: up or down. Unknown means nothing
@@ -215,13 +226,34 @@ func New(cfg Config) (*Coordinator, error) {
 		checks[c.Name] = c
 	}
 
+	known := make(map[string]bool, len(checks))
+	for name := range checks {
+		known[name] = true
+	}
+	componentsFor := map[string][]check.Component{}
+	seenComponent := map[string]bool{}
+	for _, comp := range cfg.Components {
+		if err := comp.Validate(known); err != nil {
+			return nil, err
+		}
+		if seenComponent[comp.Name] {
+			return nil, fmt.Errorf("duplicate component name %q", comp.Name)
+		}
+		seenComponent[comp.Name] = true
+		for _, name := range comp.Checks {
+			componentsFor[name] = append(componentsFor[name], comp)
+		}
+	}
+
 	return &Coordinator{
 		cfg: cfg, peers: peers, byName: byName, checks: checks, ring: ring,
-		log:    cfg.Logger,
-		client: cfg.HTTPClient,
-		now:    cfg.Now,
-		slots:  make(chan struct{}, cfg.MaxFanOuts),
-		states: map[string]*checkState{},
+		componentsFor:   componentsFor,
+		log:             cfg.Logger,
+		client:          cfg.HTTPClient,
+		now:             cfg.Now,
+		slots:           make(chan struct{}, cfg.MaxFanOuts),
+		states:          map[string]*entityState{},
+		componentStates: map[string]*entityState{},
 	}, nil
 }
 
@@ -235,6 +267,34 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 		return quorum.Verdict{}, fmt.Errorf("unknown check %q", r.Check)
 	}
 
+	v, alert, kind := c.decide(ctx, chk, r)
+
+	// A check inside a component alerts through the component, so an mx host
+	// going down produces one alert naming the failing ports rather than one
+	// per port. A check in no component is still its own alert.
+	if alert && len(c.componentsFor[chk.Name]) == 0 {
+		a := Alert{Check: chk.Name, Target: chk.Target, Kind: kind, At: c.now(), Verdict: v}
+		if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
+			// The state has already moved. Re-alerting on the next result would
+			// mean a flaky webhook produces a stream of duplicates for one
+			// outage, which is the noise this whole design is trying to remove.
+			c.log.Error("could not deliver alert", "check", chk.Name, "kind", string(kind), "err", err)
+		}
+	}
+
+	// Deliberately outside the check's lock, and unconditional. A rollup reads
+	// the state of every sibling check, so holding this one while doing it
+	// would let two results for sibling checks deadlock each other. And it runs
+	// even when nothing alerted, because a check moving from undecided to up is
+	// not an alert but does change what its component can conclude.
+	c.rollUp(ctx, chk.Name)
+	return v, nil
+}
+
+// decide runs the check's own state machine and reports whether the transition
+// is worth telling someone about. The state lock is confined here so callers
+// can safely take other locks afterwards.
+func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Result) (quorum.Verdict, bool, Kind) {
 	st := c.stateFor(chk.Name)
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -255,20 +315,11 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	v := c.evaluate(chk, results)
 	st.lastVerdict = c.now()
 
-	alert, kind := st.apply(v, c.now())
+	alert, kind := st.apply(v.Status, c.now())
 	if !alert {
 		c.log.Debug("verdict", "check", chk.Name, "status", string(v.Status), "reason", v.Reason)
-		return v, nil
 	}
-
-	a := Alert{Check: chk.Name, Target: chk.Target, Kind: kind, At: c.now(), Verdict: v}
-	if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
-		// The state has already moved. Re-alerting on the next result would
-		// mean a flaky webhook produces a stream of duplicates for one
-		// outage, which is the noise this whole design is trying to remove.
-		c.log.Error("could not deliver alert", "check", chk.Name, "kind", string(kind), "err", err)
-	}
-	return v, nil
+	return v, alert, kind
 }
 
 func (c *Coordinator) evaluate(chk check.Check, results []check.Result) quorum.Verdict {
@@ -284,8 +335,8 @@ func (c *Coordinator) evaluate(chk check.Check, results []check.Result) quorum.V
 // Alerts fire on transitions, never on results. A genuine outage produces a
 // failing result every interval for as long as it lasts, and an alert per
 // result is the behaviour that trains people to filter the channel.
-func (s *checkState) apply(v quorum.Verdict, now time.Time) (bool, Kind) {
-	switch v.Status {
+func (s *entityState) apply(status check.Status, now time.Time) (bool, Kind) {
+	switch status {
 	case check.StatusDown:
 		if s.status == check.StatusDown {
 			return false, ""
@@ -311,12 +362,12 @@ func (s *checkState) apply(v quorum.Verdict, now time.Time) (bool, Kind) {
 	}
 }
 
-func (c *Coordinator) stateFor(name string) *checkState {
+func (c *Coordinator) stateFor(name string) *entityState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st, ok := c.states[name]
 	if !ok {
-		st = &checkState{status: check.StatusUnknown}
+		st = &entityState{status: check.StatusUnknown}
 		c.states[name] = st
 	}
 	return st
@@ -491,6 +542,8 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/results", c.handleResult)
 	mux.HandleFunc("GET /v1/health", c.handleHealth)
 	mux.HandleFunc("GET /v1/status", c.handleStatus)
+	mux.HandleFunc("GET /v1/components", c.handleComponents)
+	mux.HandleFunc("GET /v1/export", c.handleExport)
 	mux.HandleFunc("GET /v1/assignments", c.handleAssignments)
 	return mux
 }
@@ -581,6 +634,10 @@ func (c *Coordinator) Status() []StatusEntry {
 
 func (c *Coordinator) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, c.Status())
+}
+
+func (c *Coordinator) handleComponents(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, c.Components())
 }
 
 func (c *Coordinator) handleAssignments(w http.ResponseWriter, r *http.Request) {
