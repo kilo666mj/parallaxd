@@ -7,9 +7,9 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: early.** The check model, the probers and the quorum evaluator work
-> and are tested. The coordinator, transport and alerting are not written.
-> Nothing is deployed.
+> **Status: early.** The check model, the probers, the quorum evaluator and the
+> signed wire protocol work and are tested. The coordinator, the prober daemon
+> and alerting are not written. Nothing is deployed.
 
 ## The problem
 
@@ -113,6 +113,37 @@ split brain, and eventually a worse Raft. A coordinator being down is a
 monitoring gap rather than an outage: probers keep probing and nothing alerts.
 That needs a dead-man's switch, which has to be answered deliberately rather
 than by accident.
+
+## Both directions are signed
+
+A prober's result is a claim about the world that the coordinator counts toward
+a verdict — and quorum de-duplication trusts the prober name on it. If that
+name were an unauthenticated string, anything that could reach the coordinator
+could manufacture agreement and alert on a healthy service, or forge `up`
+results and suppress a real outage.
+
+A coordinator's request is an instruction to open a connection to an arbitrary
+target, right now. Unauthenticated, that turns the fleet into a **probe
+amplifier**: one request fans out to every prober, aimed wherever the sender
+likes. Signing requests is what keeps a monitoring system from becoming an
+attack tool.
+
+Ed25519 throughout, with:
+
+- **Sign the bytes you send.** The transmitted payload *is* the signed payload;
+  nothing re-serializes and hopes it matches.
+- **Domain separation.** A captured result cannot verify as a request, so it
+  cannot be replayed to make probers connect somewhere.
+- **Identity binding.** The signature proves who signed; a second check proves
+  the payload claims the same identity. Otherwise one prober could sign results
+  attributed to another and vote twice.
+- **Nonces and expiry on requests**, so a result answers only the request it was
+  produced for and a captured request is not replayable forever.
+- **Clock-skew bounds**, so a prober with a badly wrong clock produces a visible
+  error rather than results that outlive every staleness check downstream.
+- **A bounded payload**, checked before the key lookup and before any allocation
+  derived from it. The length is the one field an unauthenticated sender fully
+  controls.
 
 ## Prior art
 
