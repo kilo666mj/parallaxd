@@ -95,6 +95,20 @@ type Config struct {
 	// Notifier receives alerts. Nil means log only.
 	Notifier Notifier
 
+	// Heartbeat is the outward dead-man's switch: something off the fleet that
+	// alerts when this coordinator stops pinging it. Without one, a
+	// coordinator that dies takes the alerting with it and the silence is
+	// indistinguishable from everything being fine.
+	Heartbeat Heartbeat
+
+	// StaleMultiplier and StaleGrace decide how late a check may be before
+	// nobody is considered to be watching it: interval*multiplier + grace.
+	StaleMultiplier int
+	StaleGrace      time.Duration
+
+	// WatchInterval is how often staleness is evaluated.
+	WatchInterval time.Duration
+
 	FanOutTimeout time.Duration
 	RequestTTL    time.Duration
 	ResultMaxAge  time.Duration
@@ -126,9 +140,18 @@ type Coordinator struct {
 	// slots bounds concurrent fan-outs.
 	slots chan struct{}
 
+	// startedAt is the baseline for staleness on a check that has never
+	// reported. Without it every check is stale the instant the process
+	// starts, which is how a useful signal becomes one people mute.
+	startedAt time.Time
+
 	mu              sync.Mutex
 	states          map[string]*entityState
 	componentStates map[string]*entityState
+
+	// silent tracks which probers have already been reported as not reporting,
+	// so a dead one produces one alert rather than one per watch tick.
+	silent map[string]bool
 
 	// inflight tracks background processing so shutdown can wait for a
 	// verdict to finish rather than abandoning it half-delivered.
@@ -149,8 +172,25 @@ type entityState struct {
 	// never produced a usable result has not been declared healthy.
 	status check.Status
 
+	// stale means nobody is reporting on this any more. Kept separate from
+	// status rather than overwriting it, because they are different facts:
+	// what was last decided, and whether anyone is still looking. Collapsing
+	// them loses the last verdict, and a prober restarting during an outage
+	// would then read as a second, new outage.
+	stale bool
+
 	since       time.Time
 	lastVerdict time.Time
+}
+
+// reported returns what to show a reader. A stale check is unknown however
+// healthy it looked when it went quiet — a verdict nobody is refreshing is not
+// evidence about anything now.
+func (s *entityState) reported() check.Status {
+	if s.stale {
+		return check.StatusUnknown
+	}
+	return s.status
 }
 
 // New builds a coordinator.
@@ -252,8 +292,10 @@ func New(cfg Config) (*Coordinator, error) {
 		client:          cfg.HTTPClient,
 		now:             cfg.Now,
 		slots:           make(chan struct{}, cfg.MaxFanOuts),
+		startedAt:       cfg.Now(),
 		states:          map[string]*entityState{},
 		componentStates: map[string]*entityState{},
+		silent:          map[string]bool{},
 	}, nil
 }
 
@@ -314,6 +356,10 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 
 	v := c.evaluate(chk, results)
 	st.lastVerdict = c.now()
+	// It just reported, so whatever the watchdog last concluded about its
+	// silence is out of date. Cleared here rather than waiting for the next
+	// watch tick, so a returning prober is visible immediately.
+	st.stale = false
 
 	alert, kind := st.apply(v.Status, c.now())
 	if !alert {
@@ -608,6 +654,16 @@ type StatusEntry struct {
 	Since       time.Time `json:"since,omitempty"`
 	LastVerdict time.Time `json:"last_verdict,omitempty"`
 	AssignedTo  string    `json:"assigned_to,omitempty"`
+
+	// Stale means nobody is reporting on this check any more, so Status is
+	// unknown regardless of how it last looked. A status page must render this
+	// visibly: a check silently dropping to unknown is how a monitoring system
+	// stops monitoring without anyone noticing.
+	Stale bool `json:"stale,omitempty"`
+
+	// LastKnown is the verdict before it went quiet, kept because it is still
+	// the most recent thing anyone actually observed.
+	LastKnown string `json:"last_known,omitempty"`
 }
 
 // Status reports the current state of every check.
@@ -623,7 +679,15 @@ func (c *Coordinator) Status() []StatusEntry {
 		c.mu.Unlock()
 		if st != nil {
 			st.mu.Lock()
-			e.Status, e.Since, e.LastVerdict = string(st.status), st.since, st.lastVerdict
+			e.Status = string(st.reported())
+			e.Since, e.LastVerdict = st.since, st.lastVerdict
+			if st.stale {
+				// Named separately so a reader can tell "nobody is watching
+				// this" from "the probers disagreed", which are very different
+				// problems with the same status.
+				e.Stale = true
+				e.LastKnown = string(st.status)
+			}
 			st.mu.Unlock()
 		}
 		out = append(out, e)
