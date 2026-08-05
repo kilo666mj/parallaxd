@@ -63,6 +63,11 @@ type Config struct {
 	// against it never become traffic.
 	Keyring *wire.Keyring
 
+	// Policy constrains where this prober may connect, independently of what
+	// the coordinator asks for. The host's owner decides what is reachable;
+	// the coordinator only decides what is worth checking.
+	Policy probe.Policy
+
 	// MaxConcurrent bounds simultaneous probes. Zero applies the default.
 	MaxConcurrent int
 
@@ -107,8 +112,8 @@ func New(cfg Config) (*Prober, error) {
 	return &Prober{
 		cfg: cfg,
 		kinds: map[check.Kind]probe.Prober{
-			check.KindTCP:  probe.TCP{},
-			check.KindHTTP: probe.HTTP{},
+			check.KindTCP:  probe.TCP{Policy: cfg.Policy},
+			check.KindHTTP: probe.HTTP{Policy: cfg.Policy},
 		},
 		slots:   make(chan struct{}, cfg.MaxConcurrent),
 		log:     cfg.Logger.With("prober", cfg.Name),
