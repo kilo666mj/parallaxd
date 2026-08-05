@@ -5,6 +5,27 @@
 // about this prober. Getting that wrong in the pessimistic direction turns
 // every local hiccup into evidence of an outage, which is the failure mode
 // parallaxd exists to remove.
+//
+// # On request forgery
+//
+// This package makes network requests to addresses it is given, which static
+// analysis flags as server-side request forgery — correctly, in the sense that
+// the destination comes from outside. It is also the entire purpose: an
+// availability monitor that cannot be told what to check is not one.
+//
+// The exposure is managed rather than eliminated, in two layers:
+//
+//   - Requests are signed (see internal/wire), so only the coordinator can
+//     direct a probe. That establishes who is asking.
+//   - The vantage guard in guard.go restricts where a probe may connect, at
+//     dial time, against the resolved address. That constrains what may be
+//     asked for, including from a coordinator that has been taken over.
+//
+// A CodeQL go/request-forgery alert on the HTTP prober is expected and has
+// been dismissed on that basis. If this package ever gains a probe target that
+// is not operator-configured — a redirect followed automatically, a target
+// read from a response body — that reasoning no longer holds and the alert
+// should be reinstated.
 package probe
 
 import (
