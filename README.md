@@ -7,9 +7,9 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: early.** The check model and the probers work and are tested. The
-> coordinator, quorum, transport and alerting are not written. Nothing is
-> deployed.
+> **Status: early.** The check model, the probers and the quorum evaluator work
+> and are tested. The coordinator, transport and alerting are not written.
+> Nothing is deployed.
 
 ## The problem
 
@@ -71,6 +71,33 @@ private mesh, "reachable over WireGuard" and "reachable from the internet" are
 different claims. A corroborator that answers the wrong one produces a
 confident all-clear about a question nobody asked — worse than the false
 positive it was meant to remove.
+
+## What a verdict says
+
+Quorum evaluation is pure — results in, verdict out, no clock and no I/O — and
+it applies these rules in order:
+
+- **A result answering a different question is discarded**, not counted: wrong
+  check, wrong vantage, or too old. Discards are reported, so a
+  misconfiguration surfaces instead of silently weakening the quorum.
+- **A prober votes once.** Otherwise one node that retries — or replays — can
+  manufacture a quorum by itself. The newest result from a prober wins, so a
+  retry supersedes the failure it followed.
+- **Unknown is not a vote.**
+- **Down wins if it reaches quorum, even when others report up.** A target
+  reachable from two vantages and unreachable from three is having an outage,
+  and reporting "up" because somebody got through would hide it.
+- **Without enough evidence the verdict is inconclusive, never up.** Silence is
+  not an all-clear.
+
+Optionally a quorum can require the agreeing probers to sit behind **distinct
+providers** — three probers at one host are one opinion held three times. That
+rule fails closed: probers with no provider recorded collapse into a single
+group, so an unlabelled fleet cannot satisfy it by accident.
+
+Verdicts carry the count, the dissenters and the providers, because an alert
+that cannot say *"3 of 5 across three providers, 2 still reported up"* is not
+actionable.
 
 ## Architecture
 
