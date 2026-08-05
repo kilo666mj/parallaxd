@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Stable display name for the branch-protection required check. Keep this
+    # value fixed even if steps change, or required-check references break.
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Check go.mod is tidy
+        # A library's go.mod is part of its public contract: a stale require
+        # or a missing sum breaks every consumer's build, not just this repo's.
+        # git status rather than git diff: with no third-party dependencies
+        # there is no go.sum, and `git diff go.sum` fails outright on a path
+        # that does not exist. status also catches tidy *creating* a go.sum,
+        # which diff against the index would miss.
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
+            echo "go.mod/go.sum are not tidy; run 'go mod tidy':"
+            git status --porcelain -- go.mod go.sum
+            git diff -- go.mod
+            exit 1
+          fi
+      - name: Test
+        run: go test -race ./...
+
+  # parallaxd is a coordinator plus a prober agent, so a green test run is not
+  # enough — everything also has to still compile on the deploy Go version.
+  #
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Build
+        run: go build ./...
