@@ -23,6 +23,16 @@ const (
 
 	// KindRecovered is a check that was down and is now up.
 	KindRecovered Kind = "recovered"
+
+	// KindSilent is a prober that has stopped reporting, so its checks are no
+	// longer being run. Deliberately not KindDown: nobody probed the target,
+	// so there is no evidence about it, and paging "the service is down"
+	// because a prober rebooted is the false alert this project exists to
+	// remove.
+	KindSilent Kind = "silent"
+
+	// KindReporting is a prober that has started reporting again.
+	KindReporting Kind = "reporting"
 )
 
 // Alert is one thing worth telling someone about — either a single check, or a
@@ -38,6 +48,10 @@ type Alert struct {
 	// what keeps a grouped alert as specific as the ungrouped ones it replaces.
 	Component string   `json:"component,omitempty"`
 	Members   []Member `json:"members,omitempty"`
+
+	// Prober is set when the alert is about a prober rather than about
+	// anything it was watching — it has gone quiet, or come back.
+	Prober string `json:"prober,omitempty"`
 
 	Check  string `json:"check,omitempty"`
 	Target string `json:"target,omitempty"`
@@ -63,7 +77,10 @@ type Member struct {
 // Subject is what the alert is about, for a reader who does not care which
 // layer produced it.
 func (a Alert) Subject() string {
-	if a.Component != "" {
+	switch {
+	case a.Prober != "":
+		return a.Prober
+	case a.Component != "":
 		return a.Component
 	}
 	return a.Check
@@ -73,8 +90,28 @@ func (a Alert) Subject() string {
 func (a Alert) Summary() string {
 	var b strings.Builder
 	verb := "DOWN"
-	if a.Kind == KindRecovered {
+	switch a.Kind {
+	case KindRecovered:
 		verb = "RECOVERED"
+	case KindSilent:
+		verb = "SILENT"
+	case KindReporting:
+		verb = "REPORTING"
+	}
+
+	if a.Prober != "" {
+		fmt.Fprintf(&b, "%s prober %s", verb, a.Prober)
+		if a.Detail != "" {
+			fmt.Fprintf(&b, " — %s", a.Detail)
+		}
+		if len(a.Members) > 0 {
+			names := make([]string, 0, len(a.Members))
+			for _, m := range a.Members {
+				names = append(names, m.Check)
+			}
+			fmt.Fprintf(&b, ": %s", strings.Join(names, ", "))
+		}
+		return b.String()
 	}
 
 	if a.Component != "" {
@@ -128,9 +165,12 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 		log = slog.Default()
 	}
 	var attrs []any
-	if a.Component != "" {
+	switch {
+	case a.Prober != "":
+		attrs = []any{"prober", a.Prober, "kind", string(a.Kind), "checks", len(a.Members)}
+	case a.Component != "":
 		attrs = []any{"component", a.Component, "kind", string(a.Kind)}
-	} else {
+	default:
 		attrs = []any{
 			"check", a.Check, "target", a.Target, "kind", string(a.Kind),
 			"down", a.Verdict.Down, "up", a.Verdict.Up, "unknown", a.Verdict.Unknown,
@@ -140,11 +180,12 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 			attrs = append(attrs, "dissent", a.Verdict.Dissent)
 		}
 	}
-	// Recovery at info, failure at warn: an operator filtering for problems
+	// Good news at info, problems at warn: an operator filtering for problems
 	// should not have to read the good news to find the bad.
-	if a.Kind == KindRecovered {
+	switch a.Kind {
+	case KindRecovered, KindReporting:
 		log.Info(a.Summary(), attrs...)
-	} else {
+	default:
 		log.Warn(a.Summary(), attrs...)
 	}
 	return nil
