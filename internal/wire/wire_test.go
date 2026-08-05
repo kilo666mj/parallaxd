@@ -331,3 +331,41 @@ func TestNewRequestIDIsUnique(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// An envelope arrives from the network and its payload length is the one
+// field an unauthenticated sender fully controls. It must be refused before
+// anything is allocated from it, and before the key lookup — otherwise a
+// stranger can make the coordinator allocate on demand.
+func TestOversizedPayloadIsRefused(t *testing.T) {
+	pub, priv := keypair(t)
+	ring := ringWith(t, "probe-a", pub)
+
+	env, err := SignResult(priv, ResultPayload{Result: testResult("probe-a")})
+	if err != nil {
+		t.Fatalf("SignResult: %v", err)
+	}
+	env.Payload = make([]byte, MaxPayloadBytes+1)
+
+	if _, err := ring.OpenResult(env, now); !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("err = %v, want ErrPayloadTooLarge", err)
+	}
+
+	// Rejected even for a peer nobody has heard of, so the size check cannot
+	// be skipped by claiming an unregistered identity.
+	env.Peer = "stranger"
+	if _, err := ring.OpenResult(env, now); !errors.Is(err, ErrPayloadTooLarge) {
+		t.Errorf("err = %v, want the size checked before the key lookup", err)
+	}
+
+	// The same guard protects the request path.
+	reqEnv, err := SignRequest(priv, "probe-a", Request{
+		ID: "r", Check: testCheck(), ExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("SignRequest: %v", err)
+	}
+	reqEnv.Payload = make([]byte, MaxPayloadBytes+1)
+	if _, err := ring.OpenRequest(reqEnv, now); !errors.Is(err, ErrPayloadTooLarge) {
+		t.Errorf("err = %v, want ErrPayloadTooLarge on the request path", err)
+	}
+}

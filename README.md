@@ -141,6 +141,9 @@ Ed25519 throughout, with:
   produced for and a captured request is not replayable forever.
 - **Clock-skew bounds**, so a prober with a badly wrong clock produces a visible
   error rather than results that outlive every staleness check downstream.
+- **A bounded payload**, checked before the key lookup and before any allocation
+  derived from it. The length is the one field an unauthenticated sender fully
+  controls.
 
 ## Prior art
 

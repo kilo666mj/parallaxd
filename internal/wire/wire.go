@@ -46,12 +46,20 @@ const (
 // check applied to it.
 const maxClockSkew = 2 * time.Minute
 
+// MaxPayloadBytes bounds a signed payload. Envelopes arrive from the network
+// and are attacker-controlled before anything about them has been verified, so
+// the size is checked before any allocation derived from it. A result or a
+// request is a few hundred bytes; this is generous by three orders of
+// magnitude and still refuses to allocate on demand for a stranger.
+const MaxPayloadBytes = 64 << 10
+
 var (
-	ErrBadSignature  = errors.New("signature does not verify")
-	ErrUnknownPeer   = errors.New("no public key registered for peer")
-	ErrIdentity      = errors.New("signed payload disagrees with the envelope")
-	ErrExpired       = errors.New("message expired")
-	ErrFromTheFuture = errors.New("message timestamped too far in the future")
+	ErrBadSignature    = errors.New("signature does not verify")
+	ErrUnknownPeer     = errors.New("no public key registered for peer")
+	ErrIdentity        = errors.New("signed payload disagrees with the envelope")
+	ErrExpired         = errors.New("message expired")
+	ErrFromTheFuture   = errors.New("message timestamped too far in the future")
+	ErrPayloadTooLarge = errors.New("payload exceeds the maximum signed size")
 )
 
 // Envelope carries a signed payload. Payload is the exact byte sequence that
@@ -120,6 +128,11 @@ func (k *Keyring) Peers() []string {
 }
 
 func (k *Keyring) verify(domain string, e Envelope) error {
+	// Checked before the key lookup and before any allocation: the length is
+	// the one field an unauthenticated sender fully controls.
+	if len(e.Payload) > MaxPayloadBytes {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrPayloadTooLarge, len(e.Payload), MaxPayloadBytes)
+	}
 	pub, ok := k.keys[e.Peer]
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrUnknownPeer, e.Peer)
