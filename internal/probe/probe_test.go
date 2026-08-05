@@ -17,7 +17,7 @@ import (
 func httpCheck(target string) check.Check {
 	return check.Check{
 		Name: "test", Kind: check.KindHTTP, Target: target,
-		Vantage: check.VantagePublic, Interval: time.Minute, Timeout: 5 * time.Second,
+		Vantage: check.VantageInternal, Interval: time.Minute, Timeout: 5 * time.Second,
 		Quorum: check.Quorum{Agree: 2, Of: 3},
 	}
 }
@@ -44,7 +44,7 @@ func TestHTTPUp(t *testing.T) {
 	if r.Prober != "probe-a" || r.Provider != "hetzner" || r.Check != "test" {
 		t.Errorf("identity not stamped: %+v", r)
 	}
-	if r.Vantage != check.VantagePublic {
+	if r.Vantage != check.VantageInternal {
 		t.Errorf("vantage = %q, want it carried from the check", r.Vantage)
 	}
 	if !r.IsEvidence() {

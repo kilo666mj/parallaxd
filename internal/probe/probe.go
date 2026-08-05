@@ -5,6 +5,27 @@
 // about this prober. Getting that wrong in the pessimistic direction turns
 // every local hiccup into evidence of an outage, which is the failure mode
 // parallaxd exists to remove.
+//
+// # On request forgery
+//
+// This package makes network requests to addresses it is given, which static
+// analysis flags as server-side request forgery — correctly, in the sense that
+// the destination comes from outside. It is also the entire purpose: an
+// availability monitor that cannot be told what to check is not one.
+//
+// The exposure is managed rather than eliminated, in two layers:
+//
+//   - Requests are signed (see internal/wire), so only the coordinator can
+//     direct a probe. That establishes who is asking.
+//   - The vantage guard in guard.go restricts where a probe may connect, at
+//     dial time, against the resolved address. That constrains what may be
+//     asked for, including from a coordinator that has been taken over.
+//
+// A CodeQL go/request-forgery alert on the HTTP prober is expected and has
+// been dismissed on that basis. If this package ever gains a probe target that
+// is not operator-configured — a redirect followed automatically, a target
+// read from a response body — that reasoning no longer holds and the alert
+// should be reinstated.
 package probe
 
 import (
@@ -85,6 +106,14 @@ func classify(err error) (check.Status, string) {
 		return check.StatusUnknown, "probe cancelled before completing"
 	}
 
+	// Refused by the vantage guard before any packet left. That says the
+	// check is misconfigured — or that something is trying to aim this prober
+	// somewhere it should not go — and says nothing about the target.
+	var blocked *blockedTarget
+	if errors.As(err, &blocked) {
+		return check.StatusUnknown, blocked.Error()
+	}
+
 	// A name that will not resolve is a statement about DNS, which may be
 	// this prober's resolver rather than the target. Corroboration from a
 	// prober with working DNS settles it.
@@ -138,10 +167,7 @@ type TCP struct {
 func (TCP) Kind() check.Kind { return check.KindTCP }
 
 func (t TCP) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
-	d := t.Dialer
-	if d == nil {
-		d = &net.Dialer{}
-	}
+	d := guardedDialer(c.Vantage, t.Dialer)
 	start := time.Now()
 	conn, err := d.DialContext(ctx, "tcp", c.Target)
 	latency := time.Since(start)
@@ -168,6 +194,24 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		// No global timeout: the context already carries the check's, and a
 		// second one would produce a less specific error.
 		client = &http.Client{}
+	}
+	// Give the client a transport that refuses addresses this vantage may not
+	// reach. Done here rather than by validating the URL up front because the
+	// check has to happen against the resolved address, at connect time, or a
+	// name that resolves differently on the second lookup slips past it.
+	if client.Transport == nil {
+		client = &http.Client{
+			CheckRedirect: client.CheckRedirect,
+			Jar:           client.Jar,
+			Timeout:       client.Timeout,
+			Transport: &http.Transport{
+				DialContext:           guardedDialer(c.Vantage, nil).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConnsPerHost:   1,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Target, nil)
