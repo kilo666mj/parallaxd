@@ -120,7 +120,7 @@ func newFixture(t *testing.T) *fixture {
 func tcpCheck(target string) check.Check {
 	return check.Check{
 		Name: "target-tcp", Kind: check.KindTCP, Target: target,
-		Vantage: check.VantagePublic, Interval: time.Minute, Timeout: 3 * time.Second,
+		Vantage: check.VantageInternal, Interval: time.Minute, Timeout: 3 * time.Second,
 		Quorum: check.Quorum{Agree: 2, Of: 3},
 	}
 }

@@ -165,6 +165,28 @@ A prober holds no policy. Whether a target is down, whether enough probers
 agree, and whether anyone needs telling all belong to the coordinator — so a
 compromised prober can misreport what it saw, but cannot decide anything.
 
+### Where a prober may connect
+
+Signing establishes *who* asked, not *what may be asked for*. A coordinator
+with a bug — or one that has been taken over — could otherwise aim every prober
+in the fleet at a cloud metadata endpoint or an internal admin panel, and
+probers sit inside networks precisely where that is worth something.
+
+The vantage a check already has to declare answers this:
+
+- **Nothing may reach link-local.** `169.254.169.254` and `fe80::/10` are where
+  cloud metadata lives, and no availability check legitimately targets them.
+- **A public-vantage check may not reach loopback or private space.** Such a
+  check is incoherent — it claims to test what a user on the internet sees, and
+  no user on the internet reaches `10.0.0.1`.
+- **An internal-vantage check may**, because that is what it is for.
+
+Enforced in `Dialer.Control`, against the resolved address, on every connection
+attempt. Validating the hostname up front would be a DNS-rebinding hole: the
+name resolves to something allowed, then the dial resolves it again to
+something else. A blocked target yields `unknown`, never `down` — it says the
+check is misconfigured, not that the service is broken.
+
 ## Prior art
 
 [`rippleFCL/meshmon`](https://github.com/rippleFCL/meshmon) is the closest
