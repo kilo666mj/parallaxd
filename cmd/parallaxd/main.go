@@ -1,0 +1,262 @@
+// Command parallaxd is the coordinator.
+//
+// It is the only component that decides anything: probers observe and report,
+// this asks for corroboration when a report says something is down, applies
+// the quorum rule, remembers what it has already said, and tells someone.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/coordinator"
+	"github.com/kilo666mj/parallaxd/internal/wire"
+)
+
+// version is overridden at link time with -X main.version=<tag>.
+var version = "dev"
+
+type config struct {
+	// Name is what this coordinator signs requests as. Probers verify against
+	// it, so it must match their coordinator_name.
+	Name string `json:"name"`
+
+	Listen string `json:"listen"`
+
+	// KeyFile holds the coordinator's private key, base64. A file rather than
+	// an inline value so it can be deployed with its own permissions.
+	KeyFile string `json:"key_file"`
+
+	Probers []proberConfig `json:"probers"`
+	Checks  []checkConfig  `json:"checks"`
+
+	// Webhook, when set, receives every alert as JSON in addition to the log.
+	Webhook        string            `json:"webhook,omitempty"`
+	WebhookHeaders map[string]string `json:"webhook_headers,omitempty"`
+
+	FanOutTimeout duration `json:"fan_out_timeout,omitempty"`
+	RequestTTL    duration `json:"request_ttl,omitempty"`
+	ResultMaxAge  duration `json:"result_max_age,omitempty"`
+}
+
+type proberConfig struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+
+	// Provider groups probers sharing a network. Quorum uses it to tell three
+	// opinions from one opinion held three times; leaving it blank means a
+	// diversity requirement can never be satisfied, which fails closed.
+	Provider string `json:"provider"`
+
+	// PublicKey authenticates results from this prober, base64.
+	PublicKey string `json:"public_key"`
+}
+
+type checkConfig struct {
+	Name         string        `json:"name"`
+	Kind         check.Kind    `json:"kind"`
+	Target       string        `json:"target"`
+	Vantage      check.Vantage `json:"vantage"`
+	Interval     duration      `json:"interval"`
+	Timeout      duration      `json:"timeout"`
+	Quorum       check.Quorum  `json:"quorum"`
+	ExpectStatus []int         `json:"expect_status,omitempty"`
+	ExpectBody   string        `json:"expect_body,omitempty"`
+}
+
+func (c checkConfig) toCheck() check.Check {
+	return check.Check{
+		Name: c.Name, Kind: c.Kind, Target: c.Target, Vantage: c.Vantage,
+		Interval: time.Duration(c.Interval), Timeout: time.Duration(c.Timeout),
+		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
+	}
+}
+
+type duration time.Duration
+
+func (d *duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf(`duration must be a string like "30s": %w`, err)
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = duration(parsed)
+	return nil
+}
+
+func main() {
+	var (
+		configPath = flag.String("config", "/etc/parallaxd/coordinator.json", "config file path")
+		genKey     = flag.Bool("genkey", false, "generate a keypair and exit")
+		debug      = flag.Bool("debug", false, "verbose logging")
+		showVer    = flag.Bool("version", false, "print version and exit")
+	)
+	flag.Parse()
+
+	if *showVer {
+		fmt.Println("parallaxd", version)
+		return
+	}
+	if *genKey {
+		pub, priv, err := wire.GenerateKey()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "generate key:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("# private key — write to the coordinator's key_file, mode 0600\n%s\n\n",
+			wire.EncodeKey(priv))
+		fmt.Printf("# public key — set as coordinator_key on every prober\n%s\n",
+			wire.EncodeKey(pub))
+		return
+	}
+
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(log)
+
+	if err := run(*configPath, log); err != nil {
+		log.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run(configPath string, log *slog.Logger) error {
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	rawKey, err := os.ReadFile(cfg.KeyFile)
+	if err != nil {
+		return fmt.Errorf("read key file: %w", err)
+	}
+	key, err := wire.DecodePrivateKey(strings.TrimSpace(string(rawKey)))
+	if err != nil {
+		return err
+	}
+
+	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
+	for _, p := range cfg.Probers {
+		pub, err := wire.DecodePublicKey(p.PublicKey)
+		if err != nil {
+			return fmt.Errorf("prober %q: %w", p.Name, err)
+		}
+		peers = append(peers, coordinator.Peer{
+			Name: p.Name, URL: p.URL, Provider: p.Provider, PublicKey: pub,
+		})
+	}
+
+	checks := make([]check.Check, 0, len(cfg.Checks))
+	for _, c := range cfg.Checks {
+		checks = append(checks, c.toCheck())
+	}
+
+	// The log always gets the alert. A webhook is additional, so a webhook
+	// that is down costs the integration and not the record.
+	var notifier coordinator.Notifier = coordinator.LogNotifier{Logger: log}
+	if cfg.Webhook != "" {
+		notifier = coordinator.Notifiers{
+			coordinator.LogNotifier{Logger: log},
+			coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders},
+		}
+	}
+
+	c, err := coordinator.New(coordinator.Config{
+		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
+		Notifier:      notifier,
+		FanOutTimeout: time.Duration(cfg.FanOutTimeout),
+		RequestTTL:    time.Duration(cfg.RequestTTL),
+		ResultMaxAge:  time.Duration(cfg.ResultMaxAge),
+		Logger:        log,
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           c.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+	}
+
+	errs := make(chan error, 1)
+	go func() {
+		log.Info("listening", "addr", cfg.Listen, "coordinator", cfg.Name,
+			"probers", len(peers), "checks", len(checks), "version", version)
+		for prober, assigned := range c.Assignments() {
+			log.Info("assignment", "prober", prober, "checks", assigned)
+		}
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errs <- err
+		}
+	}()
+
+	select {
+	case err := <-errs:
+		return err
+	case <-ctx.Done():
+	}
+
+	log.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	// A verdict already being worked on gets to finish and be delivered,
+	// rather than being abandoned halfway through an alert.
+	c.Wait()
+	return nil
+}
+
+func loadConfig(path string) (config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return config{}, fmt.Errorf("read config: %w", err)
+	}
+	cfg := config{Listen: "127.0.0.1:8972", Name: "coordinator"}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return config{}, fmt.Errorf("parse config: %w", err)
+	}
+
+	switch {
+	case strings.TrimSpace(cfg.KeyFile) == "":
+		return config{}, errors.New("key_file is required")
+	case len(cfg.Probers) == 0:
+		return config{}, errors.New("at least one prober is required")
+	}
+	for _, p := range cfg.Probers {
+		switch {
+		case strings.TrimSpace(p.Name) == "":
+			return config{}, errors.New("every prober needs a name")
+		case strings.TrimSpace(p.URL) == "":
+			return config{}, fmt.Errorf("prober %q: url is required", p.Name)
+		case strings.TrimSpace(p.PublicKey) == "":
+			return config{}, fmt.Errorf("prober %q: public_key is required — without it "+
+				"its results cannot be authenticated and anything could vote as it", p.Name)
+		}
+	}
+	return cfg, nil
+}
