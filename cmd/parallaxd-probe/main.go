@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/probe"
 	"github.com/kilo666mj/parallaxd/internal/prober"
 	"github.com/kilo666mj/parallaxd/internal/wire"
 )
@@ -55,6 +56,16 @@ type config struct {
 
 	// CoordinatorURL is where scheduled results are submitted.
 	CoordinatorURL string `json:"coordinator_url"`
+
+	// AllowTargets, when set, is the exhaustive list of networks this prober
+	// may connect to, as CIDR prefixes or bare addresses. Empty means
+	// anywhere the built-in and vantage rules permit — fine for a prober on a
+	// public network, wrong for one inside something sensitive.
+	AllowTargets []string `json:"allow_targets,omitempty"`
+
+	// DenyTargets is subtracted from whatever AllowTargets permits. Deny
+	// wins, so a narrow exclusion inside a broad allowance works.
+	DenyTargets []string `json:"deny_targets,omitempty"`
 
 	// Checks assigned to this prober. In steady state only these run here;
 	// everything else happens on request. Later this comes from the
@@ -169,12 +180,28 @@ func run(configPath string, log *slog.Logger) error {
 		return err
 	}
 
+	allow, err := probe.ParsePrefixes(cfg.AllowTargets)
+	if err != nil {
+		return fmt.Errorf("allow_targets: %w", err)
+	}
+	deny, err := probe.ParsePrefixes(cfg.DenyTargets)
+	if err != nil {
+		return fmt.Errorf("deny_targets: %w", err)
+	}
+
 	p, err := prober.New(prober.Config{
 		Name: cfg.Name, Provider: cfg.Provider,
 		Key: key, Keyring: ring, Logger: log,
+		Policy: probe.Policy{Allow: allow, Deny: deny},
 	})
 	if err != nil {
 		return err
+	}
+	if len(allow) > 0 {
+		log.Info("target allowlist in force", "networks", cfg.AllowTargets)
+	}
+	if len(deny) > 0 {
+		log.Info("target denylist in force", "networks", cfg.DenyTargets)
 	}
 
 	checks := make([]check.Check, 0, len(cfg.Checks))

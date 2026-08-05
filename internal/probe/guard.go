@@ -21,18 +21,22 @@ import (
 // DNS-rebinding hole: the name resolves to something allowed, and the dial
 // resolves it again to something else. Dialer.Control runs with the actual
 // address being connected to, after resolution, for every attempt.
-//
-// The rules follow from the vantage the check already has to declare:
-//
-//   - Nothing may reach link-local. Cloud metadata services live at
-//     169.254.169.254 and fe80::/10, and no legitimate availability check
-//     targets them.
-//   - A public-vantage check may not reach loopback or private space. Such a
-//     check is incoherent: it claims to test what a user on the internet sees,
-//     and no user on the internet reaches 10.0.0.1.
-//
-// An internal-vantage check may reach private space, because that is what it
-// is for.
+
+// Policy is the operator's statement of where this prober may connect. It
+// belongs to the prober rather than to a check: the coordinator says what to
+// probe, the host's owner says what is reachable at all, and the second must
+// not be overridable by the first.
+type Policy struct {
+	// Allow, when non-empty, is exhaustive: an address outside every prefix
+	// is refused. Empty means "anywhere the built-in rules permit", which is
+	// the right default for a prober on a public network and the wrong one
+	// for a prober sitting inside something sensitive.
+	Allow []netip.Prefix
+
+	// Deny is subtracted from whatever Allow permits. Deny wins, so a narrow
+	// exclusion inside a broad allowance does what it looks like.
+	Deny []netip.Prefix
+}
 
 // blockedTarget explains why an address was refused.
 type blockedTarget struct {
@@ -44,12 +48,17 @@ func (b *blockedTarget) Error() string {
 	return fmt.Sprintf("refusing to probe %s: %s", b.addr, b.reason)
 }
 
-// checkAddr reports whether this vantage may connect to addr.
-func checkAddr(v check.Vantage, addr netip.Addr) error {
+// allows reports whether this vantage and policy permit connecting to addr.
+//
+// The order is deliberate. Built-in refusals and vantage rules come first and
+// cannot be re-enabled by an allowlist — an operator who writes 0.0.0.0/0 has
+// said "anywhere reasonable", not "including the metadata service". Then deny,
+// then allow.
+func (p Policy) allows(v check.Vantage, addr netip.Addr) error {
 	switch {
 	case addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast():
-		// 169.254.169.254 and friends. Refused for every vantage: there is no
-		// availability check that legitimately wants a metadata service.
+		// 169.254.169.254 and friends. Refused for every vantage and every
+		// policy: no availability check legitimately wants a metadata service.
 		return &blockedTarget{addr, "link-local addresses are never probed " +
 			"(cloud metadata lives there)"}
 	case addr.IsMulticast():
@@ -68,7 +77,28 @@ func checkAddr(v check.Vantage, addr netip.Addr) error {
 				"by a private address"}
 		}
 	}
+
+	if pfx, ok := match(p.Deny, addr); ok {
+		return &blockedTarget{addr, fmt.Sprintf("this prober denies %s", pfx)}
+	}
+	if len(p.Allow) > 0 {
+		if _, ok := match(p.Allow, addr); !ok {
+			return &blockedTarget{addr, "outside every network this prober is allowed to probe"}
+		}
+	}
 	return nil
+}
+
+func match(prefixes []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
+	for _, pfx := range prefixes {
+		// Both sides are unmapped so an IPv4-mapped IPv6 address is judged as
+		// the IPv4 address it is — otherwise ::ffff:10.0.0.1 slips past a
+		// 10.0.0.0/8 rule.
+		if pfx.Masked().Contains(addr) {
+			return pfx, true
+		}
+	}
+	return netip.Prefix{}, false
 }
 
 // isULA reports whether addr is an IPv6 unique local address (fc00::/7),
@@ -80,9 +110,9 @@ func isULA(addr netip.Addr) bool {
 	return addr.As16()[0]&0xfe == 0xfc
 }
 
-// guardedDialer returns a dialer that refuses addresses this vantage may not
-// reach. base may be nil.
-func guardedDialer(v check.Vantage, base *net.Dialer) *net.Dialer {
+// guardedDialer returns a dialer that refuses addresses this vantage and
+// policy forbid. base may be nil.
+func guardedDialer(v check.Vantage, p Policy, base *net.Dialer) *net.Dialer {
 	d := &net.Dialer{}
 	if base != nil {
 		copied := *base
@@ -101,7 +131,7 @@ func guardedDialer(v check.Vantage, base *net.Dialer) *net.Dialer {
 			// an assumption here is wrong, so refuse rather than guess.
 			return fmt.Errorf("refusing to probe %q: not a resolved address", host)
 		}
-		if err := checkAddr(v, addr.Unmap()); err != nil {
+		if err := p.allows(v, addr.Unmap()); err != nil {
 			return err
 		}
 		if inner != nil {
@@ -110,4 +140,23 @@ func guardedDialer(v check.Vantage, base *net.Dialer) *net.Dialer {
 		return nil
 	}
 	return d
+}
+
+// ParsePrefixes turns config strings into prefixes, accepting a bare address
+// as a single-host prefix so an operator can write "192.0.2.10" rather than
+// "192.0.2.10/32".
+func ParsePrefixes(in []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(in))
+	for _, s := range in {
+		if pfx, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, pfx.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(s)
+		if err != nil {
+			return nil, fmt.Errorf("%q is neither an address nor a CIDR prefix", s)
+		}
+		out = append(out, netip.PrefixFrom(addr.Unmap(), addr.BitLen()))
+	}
+	return out, nil
 }

@@ -181,11 +181,27 @@ The vantage a check already has to declare answers this:
   no user on the internet reaches `10.0.0.1`.
 - **An internal-vantage check may**, because that is what it is for.
 
-Enforced in `Dialer.Control`, against the resolved address, on every connection
-attempt. Validating the hostname up front would be a DNS-rebinding hole: the
-name resolves to something allowed, then the dial resolves it again to
-something else. A blocked target yields `unknown`, never `down` — it says the
-check is misconfigured, not that the service is broken.
+And the operator can narrow it further, per prober:
+
+```jsonc
+{
+  "allow_targets": ["10.0.0.0/8", "192.0.2.0/24"],  // exhaustive when set
+  "deny_targets":  ["10.9.0.0/16"]                  // deny wins
+}
+```
+
+That closes what the vantage rules alone leave open: an internal-vantage check
+may otherwise reach anything private, which is a pivot if the coordinator is
+taken over. The coordinator says what is worth checking; **the host's owner
+says what is reachable at all**, and the second is not overridable by the
+first — an allowlist of `0.0.0.0/0` still cannot re-enable the metadata
+address.
+
+All of it is enforced in `Dialer.Control`, against the resolved address, on
+every connection attempt. Validating the hostname up front would be a
+DNS-rebinding hole: the name resolves to something allowed, then the dial
+resolves it again to something else. A blocked target yields `unknown`, never
+`down` — it says the check is misconfigured, not that the service is broken.
 
 ## Prior art
 
