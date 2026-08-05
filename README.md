@@ -257,6 +257,90 @@ DOWN svc (mx.example.com:465) — 3 of 5 probers reported down across 3
 providers: contabo, hetzner, netcup; 2 still reported up
 ```
 
+## Components
+
+A check is how the system finds out; a **component** is what a person cares
+about. Nobody outside the fleet wants to know whether `mx-smtps` answered TCP
+465 from three vantages — they want to know whether email works.
+
+```json
+"components": [
+  {
+    "name": "email",
+    "description": "Sending and receiving mail",
+    "checks": ["mx-smtps", "mx-imaps", "mx-submission"]
+  },
+  {
+    "name": "dns",
+    "checks": ["ns1", "ns2", "ns3"],
+    "down_if": "quorum",
+    "down_at": 2
+  }
+]
+```
+
+**A check that belongs to a component does not alert on its own.** The
+component alerts once, naming the members that failed:
+
+```
+DOWN email — mx-smtps, mx-imaps
+```
+
+Otherwise an mx host going down produces one alert per port *plus* one for the
+component, which is the noise the grouping exists to remove. A check in no
+component is still its own alert, so components are opt-in and adding one to
+part of a config does not silence the rest.
+
+Three rollup rules:
+
+| `down_if` | The component is down when |
+|---|---|
+| `any` (default) | any member check is down — if any part of a service is broken, the service is broken |
+| `all` | every member is down — for a pool of equivalent members, one failing is degraded, not an outage |
+| `quorum` | `down_at` or more members are down |
+
+The same rule as everywhere else applies to the rollup: **an undecided check is
+not evidence.** It cannot make a component down, and it cannot make one up
+either — a component is `up` only when every member has been decided and none
+is failing. A check that goes quiet holds its component at `unknown` rather
+than being silently read as healthy. The exception is a rollup already
+satisfied: one failing check under `any` takes the component down whether or
+not the others have reported.
+
+## Status export
+
+parallaxd exports the state a status page is built from. **It does not host
+one.**
+
+A public status page has to survive the outage it reports, and one served from
+the monitored fleet is unavailable in exactly the situation it exists for. That
+is a property of where it runs, not of how it is written, so the split is:
+the coordinator publishes a document, and something off-fleet — object storage,
+a static host — renders it.
+
+```
+GET /v1/export              the document
+GET /v1/export?signed=true  the same document in a signed envelope
+GET /v1/components          just the component view
+```
+
+The document carries components, the checks behind them, and `generated_at`.
+**A renderer must check that timestamp against its own clock.** A page built
+from an export the coordinator stopped producing an hour ago shows everything
+exactly as it was, which is worse than showing nothing — and staleness is the
+one failure a static page cannot detect on its own.
+
+`?signed=true` wraps it in an Ed25519 envelope signed with the coordinator key
+probers already verify, so a renderer can check provenance without a second
+trust relationship, and the export can be served from storage nobody has to
+trust. Verification and interpretation are separate: `wire.OpenDocument`
+answers "did the coordinator write this" and hands back raw bytes.
+
+What deliberately stays out: incident lifecycle, human-written updates,
+maintenance windows, subscriber notification. The value of those is that a
+person wrote them, and generating them from probe verdicts produces a worse
+page than none — flapping components, protocol jargon, no context.
+
 ## Prior art
 
 [`rippleFCL/meshmon`](https://github.com/rippleFCL/meshmon) is the closest
