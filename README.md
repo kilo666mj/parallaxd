@@ -7,9 +7,10 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: early.** The check model, the probers, the quorum evaluator, the
-> signed wire protocol and the `parallaxd-probe` agent work and are tested. The
-> coordinator and alerting are not written. Nothing is deployed.
+> **Status: early but complete end to end.** Both binaries build, run, and have
+> been smoke-tested together: a real outage produces exactly one alert and a
+> recovery produces one more. Not deployed anywhere yet, and probers still take
+> their check list from their own config rather than from the coordinator.
 
 ## The problem
 
@@ -202,6 +203,59 @@ every connection attempt. Validating the hostname up front would be a
 DNS-rebinding hole: the name resolves to something allowed, then the dial
 resolves it again to something else. A blocked target yields `unknown`, never
 `down` — it says the check is misconfigured, not that the service is broken.
+
+## What the coordinator does
+
+`parallaxd` is the only component that decides anything. An incident:
+
+```
+prober reports down  ->  ask Of-1 others, concurrently, with a deadline
+                     ->  quorum.Evaluate over everything that came back
+                     ->  state machine: alert only on a transition
+```
+
+**Only a failure is worth asking about.** An `up` result already answers the
+question, so corroborating it would spend N probes to confirm what one prober
+can see — the cost model this design exists to avoid. A check whose quorum a
+single report already satisfies (`agree: 1`) skips the fan-out too.
+
+**The reporting prober is never asked again.** It has voted; quorum would
+de-duplicate it anyway, so asking would spend a probe to learn nothing.
+
+**Silence is not a vote.** A corroborator that does not answer inside the
+deadline contributes nothing rather than counting as agreement or dissent. The
+quorum simply goes unmet, and an unmet quorum stays quiet.
+
+**Alerts fire on transitions, never on results.** A genuine outage produces a
+failing result every interval for as long as it lasts; an alert per result is
+what trains people to filter the channel. Down alerts once, recovery alerts
+once, and an **inconclusive verdict does not clear a down** — not being able to
+confirm an outage is not evidence that it ended.
+
+A first-ever `up` is not a recovery either. Announcing "recovered" for
+everything at startup is the other way a monitoring channel gets muted.
+
+Assignment is computed rather than configured — rendezvous hashing over check
+name and prober name, so adding a prober moves only the checks that should
+move, instead of reshuffling every check to a different vantage. `GET
+/v1/assignments` exposes it; `GET /v1/status` shows the current verdict per
+check.
+
+### Alerting
+
+A `Notifier` interface with two generic implementations: a log, and a webhook
+that POSTs the alert as JSON. Anything that knows about a particular chat
+product or monitoring system belongs outside this repository — parallaxd should
+be useful to someone running none of the same infrastructure, and the webhook is
+where their own glue attaches.
+
+Alerts carry the whole verdict, because the strength of the agreement is part
+of the finding:
+
+```
+DOWN svc (mx.example.com:465) — 3 of 5 probers reported down across 3
+providers: contabo, hetzner, netcup; 2 still reported up
+```
 
 ## Prior art
 
