@@ -143,10 +143,14 @@ func (k *Keyring) verify(domain string, e Envelope) error {
 	return nil
 }
 
+// signedBytes prefixes the payload with its domain separator.
+//
+// Built by appending rather than pre-sizing with make: there is no size
+// arithmetic to get wrong on an input that arrives from the network, and the
+// payload is already bounded by MaxPayloadBytes before it reaches here. The
+// allocation this saves is not worth reasoning about overflow for.
 func signedBytes(domain string, payload []byte) []byte {
-	out := make([]byte, 0, len(domain)+len(payload))
-	out = append(out, domain...)
-	return append(out, payload...)
+	return append([]byte(domain), payload...)
 }
 
 func seal(priv ed25519.PrivateKey, domain, peer string, v any) (Envelope, error) {
