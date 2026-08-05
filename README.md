@@ -7,9 +7,9 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: early.** The check model, the probers, the quorum evaluator and the
-> signed wire protocol work and are tested. The coordinator, the prober daemon
-> and alerting are not written. Nothing is deployed.
+> **Status: early.** The check model, the probers, the quorum evaluator, the
+> signed wire protocol and the `parallaxd-probe` agent work and are tested. The
+> coordinator and alerting are not written. Nothing is deployed.
 
 ## The problem
 
@@ -144,6 +144,26 @@ Ed25519 throughout, with:
 - **A bounded payload**, checked before the key lookup and before any allocation
   derived from it. The length is the one field an unauthenticated sender fully
   controls.
+
+## Running a prober
+
+```sh
+parallaxd-probe -genkey        # private half to the agent, public half to the coordinator
+parallaxd-probe -config /etc/parallaxd/probe.json
+```
+
+A prober will open a socket to an arbitrary address when told to, which is a
+useful thing to own if you are not its owner. So the order of operations in the
+request handler is the point: read a bounded body, verify the signature, and
+only then connect to anything. An unverifiable request produces **no traffic at
+all** — not a refused probe reported as down, not a connection that is opened
+and discarded. `TestUnverifiedRequestCausesNoTraffic` asserts that against a
+listener that counts connections, with a valid request as the control so the
+test cannot pass by everything being broken.
+
+A prober holds no policy. Whether a target is down, whether enough probers
+agree, and whether anyone needs telling all belong to the coordinator — so a
+compromised prober can misreport what it saw, but cannot decide anything.
 
 ## Prior art
 

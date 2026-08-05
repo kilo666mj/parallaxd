@@ -1,0 +1,284 @@
+// Command parallaxd-probe is the prober agent.
+//
+// It runs the checks it is assigned, answers signed corroboration requests,
+// and signs everything it reports. It decides nothing: whether a target is
+// down, whether enough probers agree, and whether anyone needs telling all
+// belong to the coordinator.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/prober"
+	"github.com/kilo666mj/parallaxd/internal/wire"
+)
+
+// version is overridden at link time with -X main.version=<tag>.
+var version = "dev"
+
+type config struct {
+	// Name identifies this prober fleet-wide. Quorum counts one vote per
+	// name, so a duplicate would let two hosts vote as one — or one host vote
+	// twice, depending on which way the mistake ran.
+	Name string `json:"name"`
+
+	// Provider groups probers sharing a network, so a quorum can tell three
+	// opinions from one opinion held three times.
+	Provider string `json:"provider"`
+
+	Listen string `json:"listen"`
+
+	// KeyFile holds this prober's private key, base64. A file rather than an
+	// inline value so it can be deployed with its own permissions and kept
+	// out of anything that gets copied around.
+	KeyFile string `json:"key_file"`
+
+	// CoordinatorKey is the coordinator's public key, base64. Requests that
+	// do not verify against it never become network traffic.
+	CoordinatorKey string `json:"coordinator_key"`
+
+	// CoordinatorName must match the name the coordinator signs as.
+	CoordinatorName string `json:"coordinator_name"`
+
+	// CoordinatorURL is where scheduled results are submitted.
+	CoordinatorURL string `json:"coordinator_url"`
+
+	// Checks assigned to this prober. In steady state only these run here;
+	// everything else happens on request. Later this comes from the
+	// coordinator, but a static list keeps the first version deployable.
+	Checks []checkConfig `json:"checks"`
+}
+
+// checkConfig is a check with durations written the way a human would.
+type checkConfig struct {
+	Name         string        `json:"name"`
+	Kind         check.Kind    `json:"kind"`
+	Target       string        `json:"target"`
+	Vantage      check.Vantage `json:"vantage"`
+	Interval     duration      `json:"interval"`
+	Timeout      duration      `json:"timeout"`
+	Quorum       check.Quorum  `json:"quorum"`
+	ExpectStatus []int         `json:"expect_status,omitempty"`
+	ExpectBody   string        `json:"expect_body,omitempty"`
+}
+
+func (c checkConfig) toCheck() check.Check {
+	return check.Check{
+		Name: c.Name, Kind: c.Kind, Target: c.Target, Vantage: c.Vantage,
+		Interval: time.Duration(c.Interval), Timeout: time.Duration(c.Timeout),
+		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
+	}
+}
+
+type duration time.Duration
+
+func (d *duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf(`duration must be a string like "30s": %w`, err)
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = duration(parsed)
+	return nil
+}
+
+func main() {
+	var (
+		configPath = flag.String("config", "/etc/parallaxd/probe.json", "config file path")
+		genKey     = flag.Bool("genkey", false, "generate a keypair and exit")
+		debug      = flag.Bool("debug", false, "verbose logging")
+		showVer    = flag.Bool("version", false, "print version and exit")
+	)
+	flag.Parse()
+
+	if *showVer {
+		fmt.Println("parallaxd-probe", version)
+		return
+	}
+	if *genKey {
+		if err := generateKey(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "generate key:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(log)
+
+	if err := run(*configPath, log); err != nil {
+		log.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+// generateKey writes a fresh keypair. The private half goes to a file the
+// operator places; the public half goes to the coordinator's config.
+func generateKey(w *os.File) error {
+	pub, priv, err := wire.GenerateKey()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "# private key — write to the prober's key_file, mode 0600\n%s\n\n",
+		wire.EncodeKey(priv))
+	fmt.Fprintf(w, "# public key — register with the coordinator\n%s\n", wire.EncodeKey(pub))
+	return nil
+}
+
+func run(configPath string, log *slog.Logger) error {
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	rawKey, err := os.ReadFile(cfg.KeyFile)
+	if err != nil {
+		return fmt.Errorf("read key file: %w", err)
+	}
+	key, err := wire.DecodePrivateKey(strings.TrimSpace(string(rawKey)))
+	if err != nil {
+		return err
+	}
+
+	coordPub, err := wire.DecodePublicKey(cfg.CoordinatorKey)
+	if err != nil {
+		return fmt.Errorf("coordinator key: %w", err)
+	}
+	ring := wire.NewKeyring()
+	if err := ring.Add(cfg.CoordinatorName, coordPub); err != nil {
+		return err
+	}
+
+	p, err := prober.New(prober.Config{
+		Name: cfg.Name, Provider: cfg.Provider,
+		Key: key, Keyring: ring, Logger: log,
+	})
+	if err != nil {
+		return err
+	}
+
+	checks := make([]check.Check, 0, len(cfg.Checks))
+	for _, c := range cfg.Checks {
+		checks = append(checks, c.toCheck())
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	srv := &http.Server{
+		Addr:    cfg.Listen,
+		Handler: p.Handler(),
+		// A request that has not been verified yet must not be able to hold a
+		// connection open indefinitely.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+	}
+
+	errs := make(chan error, 1)
+	go func() {
+		log.Info("listening", "addr", cfg.Listen, "prober", cfg.Name,
+			"provider", cfg.Provider, "version", version)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errs <- err
+		}
+	}()
+
+	if len(checks) > 0 {
+		log.Info("scheduling assigned checks", "count", len(checks))
+		go p.Schedule(ctx, checks, &submitter{
+			url:    strings.TrimRight(cfg.CoordinatorURL, "/") + "/v1/results",
+			client: &http.Client{Timeout: 30 * time.Second},
+		})
+	} else {
+		log.Info("no checks assigned; answering corroboration requests only")
+	}
+
+	select {
+	case err := <-errs:
+		return err
+	case <-ctx.Done():
+	}
+
+	log.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+}
+
+// submitter posts signed results to the coordinator.
+type submitter struct {
+	url    string
+	client *http.Client
+}
+
+func (s *submitter) Submit(ctx context.Context, env wire.Envelope) error {
+	body, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("coordinator returned %s", resp.Status)
+	}
+	return nil
+}
+
+func loadConfig(path string) (config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return config{}, fmt.Errorf("read config: %w", err)
+	}
+	cfg := config{Listen: "127.0.0.1:8973", CoordinatorName: "coordinator"}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return config{}, fmt.Errorf("parse config: %w", err)
+	}
+
+	switch {
+	case strings.TrimSpace(cfg.Name) == "":
+		return config{}, errors.New("name is required")
+	case strings.TrimSpace(cfg.KeyFile) == "":
+		return config{}, errors.New("key_file is required")
+	case strings.TrimSpace(cfg.CoordinatorKey) == "":
+		return config{}, errors.New("coordinator_key is required: without it " +
+			"nothing can be verified and this prober would probe on anyone's say-so")
+	case len(cfg.Checks) > 0 && strings.TrimSpace(cfg.CoordinatorURL) == "":
+		return config{}, errors.New("coordinator_url is required when checks are assigned")
+	}
+
+	for _, c := range cfg.Checks {
+		if err := c.toCheck().Validate(); err != nil {
+			return config{}, err
+		}
+	}
+	return cfg, nil
+}
