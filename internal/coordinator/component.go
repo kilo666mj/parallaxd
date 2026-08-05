@@ -66,7 +66,10 @@ func (c *Coordinator) checkStatuses(names []string) map[string]check.Status {
 			continue
 		}
 		st.mu.Lock()
-		out[name] = st.status
+		// reported, not status: a stale check is undecided for rollup
+		// purposes, so a component whose checks went quiet holds at unknown
+		// instead of continuing to look healthy.
+		out[name] = st.reported()
 		st.mu.Unlock()
 	}
 	return out
