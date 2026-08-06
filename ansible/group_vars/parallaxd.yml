@@ -369,6 +369,8 @@ parallaxd_components:
   # actionable, not more. A component earns its place when a person would
   # rather hear the group than the member.
 
+parallaxd_maintenance: []
+
 # ---------------------------------------------------------------------------
 # Probers
 # ---------------------------------------------------------------------------
@@ -376,6 +378,7 @@ parallaxd_components:
 parallaxd_prober_listen: "0.0.0.0:{{ parallaxd_prober_port }}"
 parallaxd_mesh_interval: 30s
 parallaxd_mesh_timeout: 5s
+parallaxd_assignment_interval: 30s
 
 # Where this prober may connect, independent of what the coordinator asks for.
 # The host's owner decides what is reachable; the coordinator only decides what

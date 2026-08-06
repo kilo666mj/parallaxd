@@ -9,6 +9,27 @@ import (
 	"github.com/kilo666mj/parallaxd/internal/check"
 )
 
+// specialUse contains address space that is not a public-internet vantage even
+// though netip does not classify all of it as private. Several of these ranges
+// are routed inside carriers, labs and transition networks, which makes them an
+// SSRF boundary rather than merely a semantic distinction.
+var specialUse = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:2::/48"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2001:10::/28"),
+	netip.MustParsePrefix("2001:20::/28"),
+}
+
 // A prober connects wherever it is told. Requests are signed, so only the
 // coordinator can tell it — but that is authentication, not authorisation. A
 // coordinator with a bug, or one that has been taken over, could otherwise
@@ -75,6 +96,8 @@ func (p Policy) allows(v check.Vantage, addr netip.Addr) error {
 		case addr.IsPrivate() || isULA(addr):
 			return &blockedTarget{addr, "a public-vantage check cannot be satisfied " +
 				"by a private address"}
+		case inPrefixes(specialUse, addr):
+			return &blockedTarget{addr, "a public-vantage check cannot use special-use address space"}
 		}
 	}
 
@@ -87,6 +110,11 @@ func (p Policy) allows(v check.Vantage, addr netip.Addr) error {
 		}
 	}
 	return nil
+}
+
+func inPrefixes(prefixes []netip.Prefix, addr netip.Addr) bool {
+	_, ok := match(prefixes, addr)
+	return ok
 }
 
 func match(prefixes []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {

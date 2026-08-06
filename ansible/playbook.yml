@@ -132,10 +132,8 @@
     # orphan the public half held by the other side, and the failure mode is a
     # prober whose results stop verifying — which reads as a silent prober,
     # not as a key problem.
-    # The watcher signs nothing and verifies nothing — it receives an
-    # unauthenticated heartbeat on purpose (a forged one can only make it
-    # believe the coordinator is alive, and anything able to forge one is
-    # already inside the source allowlist). So a watch-only host gets no key.
+    # The watcher verifies coordinator heartbeats using the coordinator public
+    # key, but signs nothing itself. A watch-only host therefore gets no keypair.
     # Resolved into a fact rather than inline, because a multi-line Jinja
     # conditional inside a YAML folded scalar (>-) is not folded: a
     # more-indented continuation line keeps its newline, and the command

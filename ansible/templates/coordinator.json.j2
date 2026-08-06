@@ -15,7 +15,9 @@
   ],
 
   "checks": {{ parallaxd_checks | to_nice_json(indent=2) | indent(2) }},
-  "components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
+	"components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
+	"maintenance": {{ parallaxd_maintenance | to_nice_json(indent=2) | indent(2) }},
+	"state_file": "/var/lib/parallaxd/state.json",
 
 {% if parallaxd_heartbeat_url | length > 0 %}
   "heartbeat": {

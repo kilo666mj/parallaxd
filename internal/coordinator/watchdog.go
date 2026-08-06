@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/wire"
 )
 
 // A monitoring system's worst failure is not a wrong answer, it is no answer.
@@ -106,18 +107,10 @@ func (c *Coordinator) runHeartbeat(ctx context.Context) {
 // the ping traverses the same locks every verdict traverses, so a coordinator
 // deadlocked in evaluation stops beating and the external watcher notices.
 func (c *Coordinator) beat(ctx context.Context) {
-	type liveness struct {
-		Coordinator string    `json:"coordinator"`
-		At          time.Time `json:"at"`
-		Checks      int       `json:"checks"`
-		Probers     int       `json:"probers"`
-		Stale       int       `json:"stale_checks"`
-	}
-
-	ready := make(chan liveness, 1)
+	ready := make(chan wire.Heartbeat, 1)
 	go func() {
 		e := c.Export()
-		ready <- liveness{
+		ready <- wire.Heartbeat{
 			Coordinator: e.Coordinator, At: e.GeneratedAt,
 			Checks: len(e.Checks), Probers: e.Probers, Stale: len(c.staleChecks()),
 		}
@@ -125,7 +118,7 @@ func (c *Coordinator) beat(ctx context.Context) {
 
 	// A wedged coordinator must fail to beat rather than block this loop
 	// forever, so the ping is skipped rather than waited on.
-	var body liveness
+	var body wire.Heartbeat
 	select {
 	case body = <-ready:
 	case <-time.After(c.cfg.Heartbeat.timeout()):
@@ -136,7 +129,12 @@ func (c *Coordinator) beat(ctx context.Context) {
 		return
 	}
 
-	payload, err := json.Marshal(body)
+	env, err := wire.SignHeartbeat(c.cfg.Key, body)
+	if err != nil {
+		c.log.Error("signing heartbeat", "err", err)
+		return
+	}
+	payload, err := json.Marshal(env)
 	if err != nil {
 		c.log.Error("encoding heartbeat", "err", err)
 		return
@@ -199,9 +197,7 @@ func (c *Coordinator) beatFailed(ctx context.Context, detail string) {
 		Detail: fmt.Sprintf("%d heartbeats in a row did not reach the watcher (%s); "+
 			"nothing outside this coordinator would notice if it died", n, detail),
 	}
-	if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
-		c.log.Error("could not deliver alert", "kind", string(KindUnwatched), "err", err)
-	}
+	c.emit(ctx, a)
 }
 
 func (c *Coordinator) beatSucceeded(ctx context.Context) {
@@ -214,9 +210,7 @@ func (c *Coordinator) beatSucceeded(ctx context.Context) {
 		return
 	}
 	a := Alert{Kind: KindWatched, At: c.now(), Detail: "heartbeats are reaching the watcher again"}
-	if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
-		c.log.Error("could not deliver alert", "kind", string(KindWatched), "err", err)
-	}
+	c.emit(ctx, a)
 }
 
 func (h Heartbeat) timeout() time.Duration {
@@ -305,6 +299,7 @@ func (c *Coordinator) watchStaleness(ctx context.Context) {
 // CheckStaleness evaluates which checks have gone quiet and alerts on the
 // transitions. Exported so a test can drive it without a ticker.
 func (c *Coordinator) CheckStaleness(ctx context.Context) {
+	c.releaseMaintenance(ctx)
 	stale := c.staleChecks()
 	now := c.now()
 
@@ -332,17 +327,14 @@ func (c *Coordinator) CheckStaleness(ctx context.Context) {
 	byProber := map[string][]string{}
 	for name := range stale {
 		who := "(unassigned)"
-		if assigned, ok := c.assignedTo(c.checks[name]); ok {
+		if assigned, ok := c.baseAssignedTo(c.checks[name]); ok {
 			who = assigned
 		}
 		byProber[who] = append(byProber[who], name)
 	}
 
 	for _, alert := range c.applySilence(byProber, stale, now) {
-		if err := c.cfg.Notifier.Notify(ctx, alert); err != nil {
-			c.log.Error("could not deliver alert",
-				"prober", alert.Prober, "kind", string(alert.Kind), "err", err)
-		}
+		c.emit(ctx, alert)
 	}
 
 	// A stale check can change what its components can conclude, so they are
@@ -350,6 +342,7 @@ func (c *Coordinator) CheckStaleness(ctx context.Context) {
 	for name := range stale {
 		c.rollUp(ctx, name)
 	}
+	c.persist()
 }
 
 // applySilence moves the per-prober silence state machine and returns the
@@ -394,20 +387,22 @@ func (c *Coordinator) applySilence(
 		})
 	}
 
-	// And the reverse transition. A prober that came back matters as much as
-	// one that left: without it an operator is left watching an alert that
-	// never closes.
-	for who, wasSilent := range c.silent {
-		if !wasSilent || byProber[who] != nil {
-			continue
-		}
-		c.silent[who] = false
-		out = append(out, Alert{
-			Prober: who, Kind: KindReporting, At: now,
-			Detail: "reporting again",
-		})
-	}
-
 	sort.Slice(out, func(i, j int) bool { return out[i].Prober < out[j].Prober })
 	return out
+}
+
+func (c *Coordinator) markReporting(prober string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.silent[prober] {
+		return false
+	}
+	c.silent[prober] = false
+	return true
+}
+
+func (c *Coordinator) isSilent(prober string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.silent[prober]
 }

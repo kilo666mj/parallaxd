@@ -47,10 +47,7 @@ func (c *Coordinator) rollUp(ctx context.Context, changed string) {
 			At:        c.now(),
 			Members:   c.members(comp),
 		}
-		if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
-			c.log.Error("could not deliver alert",
-				"component", comp.Name, "kind", string(kind), "err", err)
-		}
+		c.emit(ctx, a)
 	}
 }
 

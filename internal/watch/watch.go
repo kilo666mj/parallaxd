@@ -27,19 +27,15 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/kilo666mj/parallaxd/internal/wire"
 )
 
 // Beat is what the coordinator sends. It mirrors the payload the coordinator
 // already produces, so the watcher stores what it was told rather than a
 // reduction of it: when an operator goes looking after an outage, the last
 // thing the coordinator managed to say is the most useful record there is.
-type Beat struct {
-	Coordinator string    `json:"coordinator"`
-	At          time.Time `json:"at"`
-	Checks      int       `json:"checks"`
-	Probers     int       `json:"probers"`
-	Stale       int       `json:"stale_checks"`
-}
+type Beat = wire.Heartbeat
 
 // State is what the watcher currently believes about the coordinator.
 type State struct {
@@ -77,11 +73,12 @@ type Watcher struct {
 	// started is the baseline before any beat has arrived. Without it the
 	// watcher declares the coordinator dead the instant it starts, which is
 	// how a useful signal becomes one people mute.
-	started time.Time
-	last    Beat
-	haveOne bool
-	alive   bool
-	since   time.Time
+	started    time.Time
+	last       Beat
+	receivedAt time.Time
+	haveOne    bool
+	alive      bool
+	since      time.Time
 }
 
 // New builds a watcher. started is the moment it came up, used as the
@@ -100,10 +97,10 @@ func (w *Watcher) Record(b Beat) (recovered bool) {
 	defer w.mu.Unlock()
 
 	// Out-of-order delivery must not resurrect an older view.
-	if w.haveOne && b.At.Before(w.last.At) {
+	if w.haveOne && !b.At.After(w.last.At) {
 		return false
 	}
-	w.last, w.haveOne = b, true
+	w.last, w.receivedAt, w.haveOne = b, w.Now(), true
 
 	if !w.alive {
 		w.alive, w.since = true, w.Now()
@@ -145,13 +142,11 @@ func (w *Watcher) State() State {
 // arrived. Caller holds the lock.
 func (w *Watcher) silence() time.Duration {
 	from := w.started
-	if w.haveOne && w.last.At.After(from) {
-		from = w.last.At
+	if w.haveOne && w.receivedAt.After(from) {
+		from = w.receivedAt
 	}
 	d := w.Now().Sub(from)
 	if d < 0 {
-		// A beat from the future, within the skew the transport allows. Treat
-		// it as now rather than as negative silence.
 		return 0
 	}
 	return d

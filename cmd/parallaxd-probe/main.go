@@ -83,20 +83,28 @@ type config struct {
 	// total exceeds the interval its reports fall behind exactly when they
 	// matter most.
 	MeshTimeout duration `json:"mesh_timeout,omitempty"`
+
+	AssignmentInterval duration `json:"assignment_interval,omitempty"`
 }
 
 // checkConfig is a check with durations written the way a human would.
 type checkConfig struct {
-	Name         string        `json:"name"`
-	Kind         check.Kind    `json:"kind"`
-	Target       string        `json:"target"`
-	Vantage      check.Vantage `json:"vantage"`
-	Interval     duration      `json:"interval"`
-	Timeout      duration      `json:"timeout"`
-	Quorum       check.Quorum  `json:"quorum"`
-	ExpectStatus []int         `json:"expect_status,omitempty"`
-	ExpectBody   string        `json:"expect_body,omitempty"`
-	Send         string        `json:"send,omitempty"`
+	Name         string            `json:"name"`
+	Kind         check.Kind        `json:"kind"`
+	Target       string            `json:"target"`
+	Vantage      check.Vantage     `json:"vantage"`
+	Interval     duration          `json:"interval"`
+	Timeout      duration          `json:"timeout"`
+	Quorum       check.Quorum      `json:"quorum"`
+	ExpectStatus []int             `json:"expect_status,omitempty"`
+	ExpectBody   string            `json:"expect_body,omitempty"`
+	Send         string            `json:"send,omitempty"`
+	HTTPMethod   string            `json:"http_method,omitempty"`
+	HTTPHeaders  map[string]string `json:"http_headers,omitempty"`
+	HTTPBody     string            `json:"http_body,omitempty"`
+	ServerName   string            `json:"server_name,omitempty"`
+	StartTLS     bool              `json:"start_tls,omitempty"`
+	DNSRecord    string            `json:"dns_record,omitempty"`
 
 	// Prober is accepted and ignored here: the coordinator uses it to know who
 	// runs what, and a prober templated its own checks does not need telling
@@ -110,7 +118,8 @@ func (c checkConfig) toCheck() check.Check {
 		Name: c.Name, Kind: c.Kind, Target: c.Target, Vantage: c.Vantage,
 		Interval: time.Duration(c.Interval), Timeout: time.Duration(c.Timeout),
 		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
-		Send: c.Send,
+		Send: c.Send, HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders,
+		HTTPBody: c.HTTPBody, ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
 	}
 }
 
@@ -251,12 +260,19 @@ func run(configPath string, log *slog.Logger) error {
 		}
 	}()
 
-	if len(checks) > 0 {
-		log.Info("scheduling assigned checks", "count", len(checks))
-		go p.Schedule(ctx, checks, &submitter{
-			url:    strings.TrimRight(cfg.CoordinatorURL, "/") + "/v1/results",
-			client: &http.Client{Timeout: 30 * time.Second},
-		})
+	resultOut := &submitter{
+		url:    strings.TrimRight(cfg.CoordinatorURL, "/") + "/v1/results",
+		client: &http.Client{Timeout: 30 * time.Second},
+	}
+	if cfg.CoordinatorURL != "" {
+		log.Info("watching coordinator assignments")
+		go p.WatchAssignments(ctx, prober.AssignmentConfig{
+			CoordinatorURL: cfg.CoordinatorURL,
+			Interval:       time.Duration(cfg.AssignmentInterval),
+		}, resultOut)
+	} else if len(checks) > 0 {
+		log.Info("scheduling static checks", "count", len(checks))
+		go p.Schedule(ctx, checks, resultOut)
 	} else {
 		log.Info("no checks assigned; answering corroboration requests only")
 	}

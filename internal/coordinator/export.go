@@ -7,8 +7,8 @@ import (
 	"github.com/kilo666mj/parallaxd/internal/wire"
 )
 
-// parallaxd exports the state a status page is built from. It does not host
-// one.
+// parallaxd exports the state used by both its small operational dashboard and
+// off-fleet public status renderers.
 //
 // A public status page has to survive the outage it reports, and one served
 // from the monitored fleet is unavailable in the only situation it exists for.
@@ -18,10 +18,9 @@ import (
 // it. A status page can then be built later, by anything, without this growing
 // a template engine.
 //
-// What deliberately stays out: incident lifecycle, human-written updates,
-// maintenance windows, subscriber notification. The value of those is that a
-// person wrote them, and generating them from probe verdicts produces a worse
-// page than none.
+// Human-written updates and subscriber notification stay outside this
+// automatic monitor. Durable automatic incidents and maintenance suppression
+// are exposed separately by the coordinator.
 
 // exportVersion is the schema version of the document. A renderer off the
 // fleet is upgraded on someone else's schedule, so it needs to be able to say

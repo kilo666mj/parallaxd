@@ -19,11 +19,9 @@ import (
 // being run from the same place. Rendezvous moves only the checks that
 // belonged to the peer that left.
 //
-// Assignment is computed, not configured, so the check catalogue lives in one
-// place. Probers currently self-schedule from their own config; pushing
-// assignments to them, and reassigning when one goes silent, is future work.
-// Until then this is what /v1/assignments exposes so an operator can generate
-// or verify those configs rather than keeping two lists in step by hand.
+// The check catalogue lives in one place. Probers fetch their effective set
+// from /v1/checks, and owners that are silent or isolated are excluded until
+// they report or rejoin.
 func assign(checkName string, peers []Peer) (Peer, bool) {
 	var (
 		best  Peer
@@ -52,23 +50,62 @@ func weight(checkName, peerName string) uint64 {
 
 // assignedTo reports which prober runs a check in steady state.
 //
-// An explicit Prober wins over the hash. Probers self-schedule from their own
-// config today, so the operator has already made this decision; computing a
-// different answer and reporting it would mean the coordinator's view of the
-// fleet disagreed with what the fleet was doing.
+// An explicit Prober is the preferred owner; otherwise rendezvous hashing
+// chooses one. unavailable owners are temporarily removed below.
 func (c *Coordinator) assignedTo(chk check.Check) (string, bool) {
-	if chk.Prober != "" {
-		if _, known := c.byName[chk.Prober]; known {
-			return chk.Prober, true
+	preferred, ok := c.baseAssignedTo(chk)
+	if !ok {
+		return "", false
+	}
+	unavailable := c.unavailableProbers()
+	if !unavailable[preferred] {
+		return preferred, true
+	}
+	// An isolated owner cannot produce evidence. Move the check using the same
+	// stable hash over the healthy subset; when it rejoins, the preferred owner
+	// automatically resumes without reshuffling unrelated checks.
+	healthy := make([]Peer, 0, len(c.peers))
+	for _, p := range c.peers {
+		if !unavailable[p.Name] {
+			healthy = append(healthy, p)
 		}
-		// Named a prober that is not registered. Reported rather than silently
-		// falling back, because the check is not being run by anyone the
-		// coordinator knows and that is worth discovering at startup.
-		c.log.Warn("check names an unregistered prober; falling back to the computed assignment",
-			"check", chk.Name, "prober", chk.Prober)
+	}
+	p, ok := assign(chk.Name, healthy)
+	return p.Name, ok
+}
+
+func (c *Coordinator) unavailableProbers() map[string]bool {
+	out := c.isolatedProbers()
+	if out == nil {
+		out = map[string]bool{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for name, silent := range c.silent {
+		if silent {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+func (c *Coordinator) baseAssignedTo(chk check.Check) (string, bool) {
+	if chk.Prober != "" {
+		return chk.Prober, true
 	}
 	p, ok := assign(chk.Name, c.peers)
 	return p.Name, ok
+}
+
+func (c *Coordinator) checksFor(prober string) []check.Check {
+	out := []check.Check{}
+	for _, chk := range c.checks {
+		if assigned, ok := c.assignedTo(chk); ok && assigned == prober {
+			out = append(out, chk)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // Assignments returns which prober is responsible for each check, keyed by
