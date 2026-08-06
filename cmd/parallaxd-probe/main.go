@@ -96,6 +96,7 @@ type checkConfig struct {
 	Quorum       check.Quorum  `json:"quorum"`
 	ExpectStatus []int         `json:"expect_status,omitempty"`
 	ExpectBody   string        `json:"expect_body,omitempty"`
+	Send         string        `json:"send,omitempty"`
 
 	// Prober is accepted and ignored here: the coordinator uses it to know who
 	// runs what, and a prober templated its own checks does not need telling
@@ -109,6 +110,7 @@ func (c checkConfig) toCheck() check.Check {
 		Name: c.Name, Kind: c.Kind, Target: c.Target, Vantage: c.Vantage,
 		Interval: time.Duration(c.Interval), Timeout: time.Duration(c.Timeout),
 		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
+		Send: c.Send,
 	}
 }
 

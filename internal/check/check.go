@@ -26,6 +26,13 @@ type Kind string
 const (
 	KindTCP  Kind = "tcp"
 	KindHTTP Kind = "http"
+
+	// KindBanner connects, reads the greeting a server sends unprompted, and
+	// matches it. SMTP, IMAP, POP3, FTP and SSH all announce themselves this
+	// way, and the announcement is the difference between "something is
+	// listening on 25" and "a mail server is answering on 25" — which is
+	// exactly the failure a bare TCP check cannot see.
+	KindBanner Kind = "banner"
 )
 
 // Vantage is the network path a probe must take.
@@ -81,9 +88,21 @@ type Check struct {
 	// means any 2xx.
 	ExpectStatus []int `json:"expect_status,omitempty"`
 
-	// ExpectBody, for HTTP, is a substring the body must contain. A service
-	// that returns 200 with an error page is still down.
+	// ExpectBody is a substring the response must contain — the body for
+	// HTTP, the greeting for a banner check. A service that returns 200 with
+	// an error page is still down, and so is a port that accepts connections
+	// without being the thing that should be behind it.
 	ExpectBody string `json:"expect_body,omitempty"`
+
+	// Send, for a banner check, is written after the greeting has been read.
+	//
+	// It exists to hang up politely. A probe that opens an SMTP session and
+	// drops it logs "lost connection after CONNECT" on the far side every
+	// interval, and Postfix's postscreen scores an abrupt disconnect against
+	// the client — so a monitor that skipped this could get itself
+	// deny-listed by the server it was watching. "QUIT\r\n" for SMTP,
+	// "a LOGOUT\r\n" for IMAP.
+	Send string `json:"send,omitempty"`
 }
 
 // Quorum is the agreement rule.
@@ -106,8 +125,14 @@ func (c Check) Validate() error {
 	switch {
 	case strings.TrimSpace(c.Name) == "":
 		return fmt.Errorf("check name is required")
-	case c.Kind != KindTCP && c.Kind != KindHTTP:
+	case c.Kind != KindTCP && c.Kind != KindHTTP && c.Kind != KindBanner:
 		return fmt.Errorf("check %q: unknown kind %q", c.Name, c.Kind)
+	case c.Kind == KindBanner && strings.TrimSpace(c.ExpectBody) == "":
+		// A banner check with nothing to match is a TCP check that reads a
+		// few bytes first. Requiring the expectation keeps the kinds honest
+		// about what they actually verify.
+		return fmt.Errorf("check %q: a banner check needs expect_body — "+
+			"without it, use kind %q", c.Name, KindTCP)
 	case strings.TrimSpace(c.Target) == "":
 		return fmt.Errorf("check %q: target is required", c.Name)
 	case c.Vantage != VantagePublic && c.Vantage != VantageInternal:

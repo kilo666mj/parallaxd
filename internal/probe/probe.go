@@ -29,6 +29,7 @@
 package probe
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -268,4 +269,63 @@ func statusAcceptable(code int, expect []int) bool {
 		}
 	}
 	return false
+}
+
+// maxBannerRead bounds the greeting. A server that answers with an endless
+// stream is misbehaving, and a monitoring probe must never be the thing that
+// runs a host out of memory.
+const maxBannerRead = 4 << 10
+
+// Banner probes by connecting and reading the greeting the server sends
+// unprompted.
+//
+// The distinction it buys over a TCP check: a wedged Postfix, or a firewall
+// forwarding port 25 to nothing in particular, both accept connections. Only
+// the greeting says a mail server is behind it.
+type Banner struct {
+	// Dialer is used for every connection.
+	Dialer *net.Dialer
+
+	// Policy constrains where this prober may connect.
+	Policy Policy
+}
+
+func (Banner) Kind() check.Kind { return check.KindBanner }
+
+func (b Banner) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
+	d := guardedDialer(c.Vantage, b.Policy, b.Dialer)
+	start := time.Now()
+	conn, err := d.DialContext(ctx, "tcp", c.Target)
+	if err != nil {
+		status, detail := classify(err)
+		return status, 0, detail
+	}
+	defer conn.Close()
+
+	// The context carries the check's timeout; push it down to the socket so
+	// a server that accepts and then says nothing cannot outlast it.
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+
+	line, err := bufio.NewReaderSize(conn, maxBannerRead).ReadString('\n')
+	latency := time.Since(start)
+	if err != nil && line == "" {
+		// Connected, then nothing. That is the target misbehaving rather than
+		// this prober failing to ask, so it is evidence.
+		return check.StatusDown, latency, fmt.Sprintf("no greeting: %v", unwrapOp(err))
+	}
+	greeting := strings.TrimRight(line, "\r\n")
+
+	if !strings.Contains(greeting, c.ExpectBody) {
+		return check.StatusDown, latency, fmt.Sprintf(
+			"greeting %q does not contain %q", greeting, c.ExpectBody)
+	}
+
+	// Hang up politely. Best effort: the check has already succeeded, and a
+	// failure to say goodbye says nothing about the target.
+	if c.Send != "" {
+		conn.Write([]byte(c.Send))
+	}
+	return check.StatusUp, latency, ""
 }
