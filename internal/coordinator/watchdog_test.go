@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -376,16 +377,22 @@ func TestHeartbeatPings(t *testing.T) {
 		t.Errorf("Authorization = %q, want the configured header", auth)
 	}
 
-	var got map[string]any
-	if err := json.Unmarshal(last, &got); err != nil {
+	var env wire.Envelope
+	if err := json.Unmarshal(last, &env); err != nil {
 		t.Fatalf("ping body is not JSON: %v", err)
+	}
+	ring := wire.NewKeyring()
+	if err := ring.Add("coordinator", h.coord.cfg.Key.Public().(ed25519.PublicKey)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ring.OpenHeartbeat(env, h.clk.now(), time.Minute)
+	if err != nil {
+		t.Fatalf("heartbeat did not verify: %v", err)
 	}
 	// The ping carries what the coordinator could see when it sent it, so a
 	// watcher that keeps the last body has something to look at afterwards.
-	for _, field := range []string{"coordinator", "at", "checks", "probers", "stale_checks"} {
-		if _, ok := got[field]; !ok {
-			t.Errorf("ping body has no %q: %v", field, got)
-		}
+	if got.Coordinator != "coordinator" || got.At.IsZero() || got.Checks != 1 || got.Probers != 2 {
+		t.Errorf("unexpected heartbeat: %+v", got)
 	}
 }
 

@@ -176,11 +176,9 @@ func (c *Coordinator) reportMeshTransitions(ctx context.Context) {
 	}
 
 	for _, a := range alerts {
-		if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
-			c.log.Error("could not deliver alert",
-				"prober", a.Prober, "kind", string(a.Kind), "err", err)
-		}
+		c.emit(ctx, a)
 	}
+	c.persist()
 }
 
 // handlePeers serves the list probers use for their mesh checks.
@@ -197,7 +195,7 @@ func (c *Coordinator) reportMeshTransitions(ctx context.Context) {
 // Proving it costs the prober nothing: it already holds a signing key, and it
 // signs a report to this same coordinator on every mesh round.
 func (c *Coordinator) handlePeers(w http.ResponseWriter, r *http.Request) {
-	if !c.callerIsAProber(r) {
+	if _, ok := c.proberCaller(r); !ok {
 		c.log.Warn("refused a peer-list request", "remote", r.RemoteAddr)
 		http.Error(w, "not a registered prober", http.StatusForbidden)
 		return
@@ -242,40 +240,48 @@ func hostPort(raw string) string {
 // reuses the machinery already there rather than inventing a second scheme.
 // It expires, so a captured header cannot be replayed indefinitely.
 func (c *Coordinator) callerIsAProber(r *http.Request) bool {
+	_, ok := c.proberCaller(r)
+	return ok
+}
+
+func (c *Coordinator) proberCaller(r *http.Request) (string, bool) {
 	raw := r.Header.Get(wire.ProberAuthHeader)
 	if raw == "" {
-		return false
+		return "", false
 	}
 	data, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return false
+		return "", false
 	}
 	if len(data) > maxRequestBytes {
-		return false
+		return "", false
 	}
 	var env wire.Envelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		return false
+		return "", false
 	}
 	payload, err := c.ring.OpenDocument(env)
 	if err != nil {
-		return false
+		return "", false
 	}
 	var cred proberCredential
 	if err := json.Unmarshal(payload, &cred); err != nil {
-		return false
+		return "", false
 	}
 	if cred.Prober != env.Peer {
-		return false
+		return "", false
 	}
 	if _, known := c.byName[cred.Prober]; !known {
-		return false
+		return "", false
 	}
 	// Bounded in both directions: an old credential cannot be replayed, and one
 	// from a badly wrong clock is an error rather than a token that outlives
 	// every check applied to it.
 	age := c.now().Sub(cred.At)
-	return age >= -credentialSkew && age <= credentialTTL
+	if age < -credentialSkew || age > credentialTTL {
+		return "", false
+	}
+	return cred.Prober, true
 }
 
 func (c *Coordinator) handleMeshView(w http.ResponseWriter, _ *http.Request) {

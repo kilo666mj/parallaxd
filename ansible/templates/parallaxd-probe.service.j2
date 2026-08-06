@@ -26,6 +26,8 @@ ProtectControlGroups=true
 PrivateDevices=true
 PrivateTmp=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 
 # Deliberately no CAP_NET_BIND_SERVICE: the prober listens above 1024 and has
 # no reason to bind a privileged port.

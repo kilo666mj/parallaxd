@@ -146,7 +146,7 @@ func (f *fixture) signedRequest(t *testing.T, c check.Check) wire.Envelope {
 		t.Fatalf("NewRequestID: %v", err)
 	}
 	env, err := wire.SignRequest(f.coordKey, "coordinator", wire.Request{
-		ID: id, Check: c, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+		ID: id, Prober: "probe-a", Check: c, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("SignRequest: %v", err)
@@ -172,7 +172,7 @@ func TestUnverifiedRequestCausesNoTraffic(t *testing.T) {
 		"unsigned": {Peer: "coordinator", Payload: []byte(`{"id":"x"}`), Signature: []byte("nope")},
 		"signed by a stranger": func() wire.Envelope {
 			env, err := wire.SignRequest(strangerKey, "coordinator", wire.Request{
-				ID: "x", Check: c, ExpiresAt: time.Now().Add(time.Minute),
+				ID: "x", Prober: "probe-a", Check: c, ExpiresAt: time.Now().Add(time.Minute),
 			})
 			if err != nil {
 				t.Fatalf("SignRequest: %v", err)
@@ -181,7 +181,7 @@ func TestUnverifiedRequestCausesNoTraffic(t *testing.T) {
 		}(),
 		"unknown peer": func() wire.Envelope {
 			env, err := wire.SignRequest(strangerKey, "somebody-else", wire.Request{
-				ID: "x", Check: c, ExpiresAt: time.Now().Add(time.Minute),
+				ID: "x", Prober: "probe-a", Check: c, ExpiresAt: time.Now().Add(time.Minute),
 			})
 			if err != nil {
 				t.Fatalf("SignRequest: %v", err)
@@ -190,7 +190,7 @@ func TestUnverifiedRequestCausesNoTraffic(t *testing.T) {
 		}(),
 		"expired": func() wire.Envelope {
 			env, err := wire.SignRequest(f.coordKey, "coordinator", wire.Request{
-				ID: "x", Check: c,
+				ID: "x", Prober: "probe-a", Check: c,
 				IssuedAt:  time.Now().Add(-time.Hour),
 				ExpiresAt: time.Now().Add(-30 * time.Minute),
 			})
@@ -263,6 +263,30 @@ func TestSignedRequestReturnsAVerifiableResult(t *testing.T) {
 	}
 }
 
+func TestRequestAudienceAndReplayAreEnforced(t *testing.T) {
+	f := newFixture(t)
+	target := newCountingListener(t)
+	c := tcpCheck(target.addr())
+	env := f.signedRequest(t, c)
+	resp := f.post(t, env)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first status=%d", resp.StatusCode)
+	}
+	resp = f.post(t, env)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("replay status=%d, want 409", resp.StatusCode)
+	}
+	requestID, _ := wire.NewRequestID()
+	wrong, err := wire.SignRequest(f.coordKey, "coordinator", wire.Request{ID: requestID, Prober: "probe-b", Check: c, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp = f.post(t, wrong)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("wrong audience status=%d, want 403", resp.StatusCode)
+	}
+}
+
 func TestDownTargetIsReportedNotErrored(t *testing.T) {
 	f := newFixture(t)
 	target := newCountingListener(t)
@@ -291,7 +315,7 @@ func TestDownTargetIsReportedNotErrored(t *testing.T) {
 func TestUnsupportedKindIsUnknown(t *testing.T) {
 	f := newFixture(t)
 	c := tcpCheck("127.0.0.1:1")
-	c.Kind = "smtp" // not implemented yet
+	c.Kind = "gopher"
 
 	env, err := f.prober.Run(t.Context(), c, "req-1")
 	if err != nil {

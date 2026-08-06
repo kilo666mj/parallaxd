@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,29 @@ func TestHTTPExpectStatus(t *testing.T) {
 	c.ExpectStatus = []int{200}
 	if r := Run(t.Context(), HTTP{}, c, "probe-a", ""); r.Status != check.StatusDown {
 		t.Errorf("status = %q, want down when 401 is not expected", r.Status)
+	}
+}
+
+func TestHTTPMethodHeadersAndBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer test" || string(body) != "ping" {
+			http.Error(w, "wrong request", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, "accepted")
+	}))
+	defer srv.Close()
+	c := httpCheck(srv.URL)
+	c.HTTPMethod = "POST"
+	c.HTTPHeaders = map[string]string{"Authorization": "Bearer test"}
+	c.HTTPBody = "ping"
+	c.ExpectStatus = []int{http.StatusCreated}
+	c.ExpectBody = "accepted"
+	status, _, detail := HTTP{}.Probe(t.Context(), c)
+	if status != check.StatusUp {
+		t.Fatalf("status=%s detail=%s", status, detail)
 	}
 }
 

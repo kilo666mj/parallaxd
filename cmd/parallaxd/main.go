@@ -43,7 +43,9 @@ type config struct {
 
 	// Components group checks into the services a person recognises. Optional:
 	// a check in no component alerts on its own, exactly as before.
-	Components []check.Component `json:"components,omitempty"`
+	Components  []check.Component         `json:"components,omitempty"`
+	Maintenance []coordinator.Maintenance `json:"maintenance,omitempty"`
+	StateFile   string                    `json:"state_file,omitempty"`
 
 	// Webhook, when set, receives every alert as JSON in addition to the log.
 	Webhook        string            `json:"webhook,omitempty"`
@@ -88,20 +90,25 @@ type proberConfig struct {
 }
 
 type checkConfig struct {
-	Name         string        `json:"name"`
-	Kind         check.Kind    `json:"kind"`
-	Target       string        `json:"target"`
-	Vantage      check.Vantage `json:"vantage"`
-	Interval     duration      `json:"interval"`
-	Timeout      duration      `json:"timeout"`
-	Quorum       check.Quorum  `json:"quorum"`
-	ExpectStatus []int         `json:"expect_status,omitempty"`
-	ExpectBody   string        `json:"expect_body,omitempty"`
-	Send         string        `json:"send,omitempty"`
+	Name         string            `json:"name"`
+	Kind         check.Kind        `json:"kind"`
+	Target       string            `json:"target"`
+	Vantage      check.Vantage     `json:"vantage"`
+	Interval     duration          `json:"interval"`
+	Timeout      duration          `json:"timeout"`
+	Quorum       check.Quorum      `json:"quorum"`
+	ExpectStatus []int             `json:"expect_status,omitempty"`
+	ExpectBody   string            `json:"expect_body,omitempty"`
+	Send         string            `json:"send,omitempty"`
+	HTTPMethod   string            `json:"http_method,omitempty"`
+	HTTPHeaders  map[string]string `json:"http_headers,omitempty"`
+	HTTPBody     string            `json:"http_body,omitempty"`
+	ServerName   string            `json:"server_name,omitempty"`
+	StartTLS     bool              `json:"start_tls,omitempty"`
+	DNSRecord    string            `json:"dns_record,omitempty"`
 
-	// Prober names who runs this check on its own schedule. Empty means the
-	// coordinator picks by rendezvous hashing — but nothing then templates the
-	// check onto a prober, so in practice it should be set.
+	// Prober is the preferred owner. Empty uses rendezvous hashing; dynamic
+	// assignment temporarily moves checks away from unavailable owners.
 	Prober string `json:"prober,omitempty"`
 }
 
@@ -110,8 +117,10 @@ func (c checkConfig) toCheck() check.Check {
 		Name: c.Name, Kind: c.Kind, Target: c.Target, Vantage: c.Vantage,
 		Interval: time.Duration(c.Interval), Timeout: time.Duration(c.Timeout),
 		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
-		Send:   c.Send,
-		Prober: c.Prober,
+		Send:       c.Send,
+		Prober:     c.Prober,
+		HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders, HTTPBody: c.HTTPBody,
+		ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
 	}
 }
 
@@ -212,8 +221,10 @@ func run(configPath string, log *slog.Logger) error {
 
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
-		Components: cfg.Components,
-		Notifier:   notifier,
+		Components:  cfg.Components,
+		Maintenance: cfg.Maintenance,
+		StateFile:   cfg.StateFile,
+		Notifier:    notifier,
 		Heartbeat: coordinator.Heartbeat{
 			URL:      cfg.Heartbeat.URL,
 			Interval: time.Duration(cfg.Heartbeat.Interval),

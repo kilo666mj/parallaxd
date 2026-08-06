@@ -222,11 +222,18 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Target, nil)
+	method := c.HTTPMethod
+	if method == "" {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.Target, strings.NewReader(c.HTTPBody))
 	if err != nil {
 		// A malformed target is a configuration problem, not a target
 		// failure, and every prober would report it identically.
 		return check.StatusUnknown, 0, fmt.Sprintf("invalid target: %v", err)
+	}
+	for name, value := range c.HTTPHeaders {
+		req.Header.Set(name, value)
 	}
 
 	start := time.Now()

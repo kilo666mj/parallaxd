@@ -37,10 +37,11 @@ import (
 // as another, or a captured result could be replayed as a request to probe
 // something.
 const (
-	domainResult  = "parallaxd/result/v1\x00"
-	domainRequest = "parallaxd/request/v1\x00"
-	domainDoc     = "parallaxd/document/v1\x00"
-	domainMesh    = "parallaxd/mesh/v1\x00"
+	domainResult    = "parallaxd/result/v1\x00"
+	domainRequest   = "parallaxd/request/v1\x00"
+	domainDoc       = "parallaxd/document/v1\x00"
+	domainMesh      = "parallaxd/mesh/v1\x00"
+	domainHeartbeat = "parallaxd/heartbeat/v1\x00"
 )
 
 // ProberAuthHeader carries a prober's signed credential on read requests that
@@ -89,6 +90,11 @@ type Request struct {
 	// to trigger a fresh alert.
 	ID string `json:"id"`
 
+	// Prober is the only peer authorized to execute this request. Every prober
+	// trusts the same coordinator key, so omitting an audience would let one
+	// registered peer relay a captured request across the fleet.
+	Prober string `json:"prober"`
+
 	Check check.Check `json:"check"`
 
 	IssuedAt  time.Time `json:"issued_at"`
@@ -104,6 +110,17 @@ type ResultPayload struct {
 	// RequestID is empty for a scheduled probe and set when answering a
 	// corroboration request.
 	RequestID string `json:"request_id,omitempty"`
+}
+
+// Heartbeat is the coordinator's authenticated liveness statement to its
+// external watcher. The watcher measures silence from receipt time; At exists
+// for ordering, replay rejection and clock diagnostics, not as its timer.
+type Heartbeat struct {
+	Coordinator string    `json:"coordinator"`
+	At          time.Time `json:"at"`
+	Checks      int       `json:"checks"`
+	Probers     int       `json:"probers"`
+	Stale       int       `json:"stale_checks"`
 }
 
 // Keyring maps peer names to the public keys that authenticate them.
@@ -223,6 +240,8 @@ func SignRequest(priv ed25519.PrivateKey, coordinator string, r Request) (Envelo
 	case r.ExpiresAt.IsZero():
 		return Envelope{}, errors.New("request has no expiry; a captured request " +
 			"would be replayable forever")
+	case r.Prober == "":
+		return Envelope{}, errors.New("request has no intended prober")
 	}
 	return seal(priv, domainRequest, coordinator, r)
 }
@@ -239,6 +258,16 @@ func (k *Keyring) OpenRequest(e Envelope, now time.Time) (Request, error) {
 	}
 	if !now.IsZero() && now.After(r.ExpiresAt) {
 		return Request{}, fmt.Errorf("%w: expired at %s", ErrExpired, r.ExpiresAt.UTC())
+	}
+	if r.Prober == "" {
+		return Request{}, errors.New("request has no intended prober")
+	}
+	if !now.IsZero() && r.IssuedAt.After(now.Add(maxClockSkew)) {
+		return Request{}, fmt.Errorf("%w: request timestamped %s, now is %s",
+			ErrFromTheFuture, r.IssuedAt.UTC(), now.UTC())
+	}
+	if r.IssuedAt.IsZero() || !r.ExpiresAt.After(r.IssuedAt) {
+		return Request{}, errors.New("request expiry must be after its issue time")
 	}
 	if err := r.Check.Validate(); err != nil {
 		return Request{}, fmt.Errorf("request carries an invalid check: %w", err)
@@ -280,6 +309,43 @@ func (k *Keyring) OpenMeshReport(e Envelope, now time.Time) (mesh.Report, error)
 			ErrFromTheFuture, r.At.UTC(), now.UTC())
 	}
 	return r, nil
+}
+
+// SignHeartbeat produces an authenticated heartbeat from the coordinator.
+func SignHeartbeat(priv ed25519.PrivateKey, h Heartbeat) (Envelope, error) {
+	if h.Coordinator == "" {
+		return Envelope{}, errors.New("heartbeat has no coordinator name")
+	}
+	if h.At.IsZero() {
+		return Envelope{}, errors.New("heartbeat has no timestamp")
+	}
+	return seal(priv, domainHeartbeat, h.Coordinator, h)
+}
+
+// OpenHeartbeat verifies identity and bounds its timestamp in both directions.
+func (k *Keyring) OpenHeartbeat(e Envelope, now time.Time, maxAge time.Duration) (Heartbeat, error) {
+	if err := k.verify(domainHeartbeat, e); err != nil {
+		return Heartbeat{}, err
+	}
+	var h Heartbeat
+	if err := json.Unmarshal(e.Payload, &h); err != nil {
+		return Heartbeat{}, fmt.Errorf("decode heartbeat: %w", err)
+	}
+	if h.Coordinator != e.Peer {
+		return Heartbeat{}, fmt.Errorf("%w: envelope says %q, heartbeat says %q",
+			ErrIdentity, e.Peer, h.Coordinator)
+	}
+	if !now.IsZero() {
+		if h.At.After(now.Add(maxClockSkew)) {
+			return Heartbeat{}, fmt.Errorf("%w: heartbeat timestamped %s, now is %s",
+				ErrFromTheFuture, h.At.UTC(), now.UTC())
+		}
+		if maxAge > 0 && h.At.Before(now.Add(-maxAge)) {
+			return Heartbeat{}, fmt.Errorf("%w: heartbeat timestamped %s, now is %s",
+				ErrExpired, h.At.UTC(), now.UTC())
+		}
+	}
+	return h, nil
 }
 
 // SignDocument signs something the coordinator publishes rather than sends to
