@@ -25,6 +25,16 @@ func durableConfig(t *testing.T, stateFile string, notifier Notifier, maintenanc
 	return Config{Name: "coordinator", Key: coordKey, Peers: []Peer{{Name: "probe-a", Provider: "one", PublicKey: pub}}, Checks: []check.Check{chk}, Notifier: notifier, Logger: discardLogger(), StateFile: stateFile, Maintenance: maintenance}
 }
 
+func TestIncidentsIsAnEmptyCollectionBeforeFirstIncident(t *testing.T) {
+	c, err := New(durableConfig(t, "", &fakeNotifier{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incidents := c.Incidents(); incidents == nil || len(incidents) != 0 {
+		t.Fatalf("Incidents()=%v, want a non-nil empty collection", incidents)
+	}
+}
+
 func TestStateAndIncidentHistorySurviveRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	n := &fakeNotifier{}

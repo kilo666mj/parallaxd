@@ -96,7 +96,10 @@ func (c *Coordinator) recordIncident(a Alert, maintenance string) {
 func (c *Coordinator) Incidents() []Incident {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := append([]Incident(nil), c.incidents...)
+	// A JSON API should represent an empty collection as [] rather than null.
+	// The dashboard and other clients can then iterate without special-casing
+	// the coordinator's initial no-incident state.
+	out := append([]Incident{}, c.incidents...)
 	sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt.After(out[j].OpenedAt) })
 	return out
 }
