@@ -112,8 +112,9 @@ func New(cfg Config) (*Prober, error) {
 	return &Prober{
 		cfg: cfg,
 		kinds: map[check.Kind]probe.Prober{
-			check.KindTCP:  probe.TCP{Policy: cfg.Policy},
-			check.KindHTTP: probe.HTTP{Policy: cfg.Policy},
+			check.KindTCP:    probe.TCP{Policy: cfg.Policy},
+			check.KindHTTP:   probe.HTTP{Policy: cfg.Policy},
+			check.KindBanner: probe.Banner{Policy: cfg.Policy},
 		},
 		slots:   make(chan struct{}, cfg.MaxConcurrent),
 		log:     cfg.Logger.With("prober", cfg.Name),
