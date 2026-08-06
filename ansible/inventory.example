@@ -33,6 +33,14 @@ probe-b  parallaxd_address=198.51.100.12  parallaxd_provider=provider-two
 probe-c  parallaxd_address=198.51.100.13  parallaxd_provider=provider-three
 probe-d  parallaxd_address=198.51.100.14  parallaxd_provider=provider-four
 
+# [parallaxd_watch] — the far end of the dead-man's switch. A different host
+# from the coordinator, and preferably a different provider: on the same host
+# it dies with what it is watching. Reusing a prober host is fine, and saves
+# managing another box.
+[parallaxd_watch]
+probe-a
+
 [parallaxd:children]
 parallaxd_coordinator
 parallaxd_probers
+parallaxd_watch

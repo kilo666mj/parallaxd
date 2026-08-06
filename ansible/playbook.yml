@@ -13,7 +13,7 @@
 # the point of per-host keypairs: a compromised control machine cannot sign as
 # a prober, because it never held the material to do so.
 
-- name: Generate parallaxd keypairs
+- name: Install binaries and generate keypairs
   hosts: parallaxd
   become: true
   gather_facts: true
@@ -85,6 +85,7 @@
       loop:
         - parallaxd
         - parallaxd-probe
+        - parallaxd-watch
       delegate_to: localhost
       become: false
       changed_when: true
@@ -105,6 +106,14 @@
       when: inventory_hostname in groups['parallaxd_probers']
       notify: Restart prober
 
+    - name: Install the watcher binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../parallaxd-parallaxd-watch-linux-{{ parallaxd_goarch }}"
+        dest: /usr/local/bin/parallaxd-watch
+        mode: "0755"
+      when: inventory_hostname in groups['parallaxd_watch'] | default([])
+      notify: Restart watcher
+
     - name: Check whether a keypair already exists
       ansible.builtin.stat:
         path: "{{ parallaxd_key_dir }}/private"
@@ -114,7 +123,14 @@
     # orphan the public half held by the other side, and the failure mode is a
     # prober whose results stop verifying — which reads as a silent prober,
     # not as a key problem.
+    # The watcher signs nothing and verifies nothing — it receives an
+    # unauthenticated heartbeat on purpose (a forged one can only make it
+    # believe the coordinator is alive, and anything able to forge one is
+    # already inside the source allowlist). So a watch-only host gets no key.
     - name: Generate a keypair
+      when:
+        - not parallaxd_existing_key.stat.exists
+        - inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.shell:
         cmd: >-
           set -o pipefail;
@@ -124,10 +140,11 @@
           > {{ parallaxd_key_dir }}/keypair.tmp
         executable: /bin/bash
         creates: "{{ parallaxd_key_dir }}/private"
-      when: not parallaxd_existing_key.stat.exists
 
     - name: Split the keypair
-      when: not parallaxd_existing_key.stat.exists
+      when:
+        - not parallaxd_existing_key.stat.exists
+        - inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       block:
         - name: Write the private half
           ansible.builtin.shell:
@@ -151,6 +168,7 @@
             state: absent
 
     - name: Secure the private key
+      when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.file:
         path: "{{ parallaxd_key_dir }}/private"
         owner: "{{ parallaxd_user }}"
@@ -158,6 +176,7 @@
         mode: "0400"
 
     - name: Secure the public key
+      when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.file:
         path: "{{ parallaxd_key_dir }}/public"
         owner: root
@@ -167,11 +186,13 @@
     # Read back so the other side's config can be written. Only the public half
     # is ever fetched; the private half stays on the host that made it.
     - name: Read the public key
+      when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.slurp:
         src: "{{ parallaxd_key_dir }}/public"
       register: parallaxd_public_key_raw
 
     - name: Record the public key
+      when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.set_fact:
         parallaxd_public_key: "{{ parallaxd_public_key_raw.content | b64decode | trim }}"
 
@@ -185,6 +206,68 @@
     - name: Restart prober
       ansible.builtin.systemd:
         name: parallaxd-probe
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart watcher
+      ansible.builtin.systemd:
+        name: parallaxd-watch
+        state: restarted
+        daemon_reload: true
+
+# ---------------------------------------------------------------------------
+
+- name: Configure the watcher
+  hosts: parallaxd_watch
+  become: true
+  tasks:
+    - name: Fail when the watcher shares a host with the coordinator
+      ansible.builtin.assert:
+        that: inventory_hostname not in groups['parallaxd_coordinator']
+        fail_msg: >-
+          The watcher is on the same host as the coordinator, so it would die
+          with the thing it is watching. Put it on a different host, and
+          preferably a different provider.
+
+    - name: Deploy the watcher configuration
+      ansible.builtin.template:
+        src: watch.json.j2
+        dest: "{{ parallaxd_config_dir }}/watch.json"
+        owner: root
+        group: "{{ parallaxd_group }}"
+        mode: "0640"
+      notify: Restart watcher
+
+    - name: Deploy the watcher unit
+      ansible.builtin.template:
+        src: parallaxd-watch.service.j2
+        dest: /etc/systemd/system/parallaxd-watch.service
+        mode: "0644"
+      notify: Restart watcher
+
+    - name: Allow the coordinator to reach the watcher
+      ansible.posix.firewalld:
+        rich_rule: >-
+          rule family="ipv4"
+          source address="{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}"
+          port port="{{ parallaxd_watch_port }}" protocol="tcp"
+          accept
+        zone: public
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Enable and start the watcher
+      ansible.builtin.systemd:
+        name: parallaxd-watch
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart watcher
+      ansible.builtin.systemd:
+        name: parallaxd-watch
         state: restarted
         daemon_reload: true
 
@@ -255,13 +338,13 @@
   hosts: parallaxd_coordinator
   become: true
   tasks:
-    - name: Warn when no heartbeat is configured
+    - name: Warn when nothing is watching this coordinator
       ansible.builtin.debug:
         msg: >-
-          parallaxd_heartbeat_url is empty. Nothing outside the fleet will
-          notice if this coordinator dies, and that silence is indistinguishable
-          from everything being fine.
-      when: parallaxd_heartbeat_url | length == 0
+          No host is in [parallaxd_watch], so parallaxd_heartbeat_url is empty
+          and nothing will notice if this coordinator dies. That silence is
+          indistinguishable from everything being fine.
+      when: parallaxd_heartbeat_url | trim | length == 0
 
     - name: Deploy the coordinator configuration
       ansible.builtin.template:

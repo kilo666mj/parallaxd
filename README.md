@@ -111,6 +111,7 @@ A coordinator with probers, not peer-to-peer consensus.
 |---|---|
 | `parallaxd` | coordinator: assigns checks, requests corroboration, applies quorum, owns alerting and deduplication |
 | `parallaxd-probe` | prober: runs checks, answers corroboration requests, **decides nothing** |
+| `parallaxd-watch` | the far end of the dead-man's switch: receives the heartbeat, alerts when it stops |
 
 Peer-to-peer sounds better and is where these projects die — leader election,
 split brain, and eventually a worse Raft. A coordinator being down is a
@@ -404,18 +405,17 @@ conflating them makes both diagnoses ambiguous.
 
 ### Outward: is the coordinator alive?
 
-```json
-"heartbeat": {
-  "url": "https://hc-ping.example/uuid",
-  "interval": "1m",
-  "headers": {"Authorization": "Bearer ..."}
-}
-```
+`parallaxd-watch` receives the heartbeat and alerts when it stops. It ships
+with the project rather than pointing at a hosted cron-ping service, because
+what the receiver has to be is in a **different failure domain** — different
+host, different provider, different uplink — not a different company. A watcher
+one provider over catches a dead host, a crashed or wedged process, a bad
+deploy, and a provider-wide outage, which between them are essentially every
+way a coordinator fails.
 
-The coordinator POSTs to that URL on every interval. If it dies, the pings stop
-and the external service alerts. **The URL must point off the fleet** — a
-watcher inside it cannot report the fleet being unreachable, which is exactly
-the case that matters.
+```json
+"heartbeat": {"url": "http://watcher.example:8974/v1/heartbeat", "interval": "1m"}
+```
 
 The ping is **gated on the coordinator being able to read its own state**, not
 on the process still existing. A goroutine that pings on a timer proves only
@@ -424,12 +424,31 @@ fails; a wedged one still ticks. Building the state document first means the
 ping traverses the same locks every verdict traverses, so a coordinator
 deadlocked in evaluation stops beating and the external watcher fires.
 
-A failed ping is logged, never alerted. A coordinator that alerted about its own
-heartbeat would be claiming to report on its own death.
+### Who watches the watcher
 
-Starting without a heartbeat URL logs a warning rather than defaulting quietly.
-Running with no external watcher is the single point of failure this design has
-always named, and an operator should know they are running that way.
+Not a third party — each other. The watcher alerts when the coordinator stops
+checking in; the coordinator alerts when it can no longer *deliver* there.
+
+| Failure | Reported by |
+|---|---|
+| coordinator dies or wedges | the watcher, on heartbeat silence |
+| the watcher dies | the coordinator, after three failed deliveries |
+| both at once | nobody — see below |
+
+A coordinator must not claim to report its own death; that is exactly what it
+cannot do. But **"nothing is watching me" is a different fact**, and it is the
+only component positioned to know it. Left unreported, a watcher that died
+silently means the dead-man's switch is gone with nothing saying so — the same
+failure the mechanism exists to remove, one level up. A single failed delivery
+is still only logged: one dropped packet is not a dead watcher.
+
+Both dying at once is not covered, and nothing here pretends otherwise. That is
+equally true of a hosted service when the alerting path is self-hosted, so it
+is a property of the topology rather than a cost of building it yourself.
+
+Starting with no watcher logs a warning rather than defaulting quietly. Running
+unwatched is the single point of failure this design has always named, and an
+operator should know they are running that way.
 
 ### Inward: is anyone still reporting?
 
