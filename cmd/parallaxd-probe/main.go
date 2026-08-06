@@ -71,6 +71,18 @@ type config struct {
 	// everything else happens on request. Later this comes from the
 	// coordinator, but a static list keeps the first version deployable.
 	Checks []checkConfig `json:"checks"`
+
+	// MeshInterval is how often this prober checks whether it can still reach
+	// its peers. Zero applies the default; a negative value disables mesh
+	// reporting entirely, which means this prober keeps being counted even
+	// when it can reach nothing.
+	MeshInterval duration `json:"mesh_interval,omitempty"`
+
+	// MeshTimeout bounds a single peer connection. It must stay well under
+	// MeshInterval: a cut-off prober spends this on every peer, and if the
+	// total exceeds the interval its reports fall behind exactly when they
+	// matter most.
+	MeshTimeout duration `json:"mesh_timeout,omitempty"`
 }
 
 // checkConfig is a check with durations written the way a human would.
@@ -239,6 +251,21 @@ func run(configPath string, log *slog.Logger) error {
 		})
 	} else {
 		log.Info("no checks assigned; answering corroboration requests only")
+	}
+
+	// The mesh watch is what lets the coordinator tell "I cannot reach this"
+	// from "I cannot reach anything". Without it this prober keeps being
+	// counted during a partition, which is the failure the whole design is
+	// built to remove.
+	if cfg.MeshInterval >= 0 {
+		go p.WatchMesh(ctx, prober.MeshConfig{
+			CoordinatorURL: cfg.CoordinatorURL,
+			Interval:       time.Duration(cfg.MeshInterval),
+			Timeout:        time.Duration(cfg.MeshTimeout),
+		})
+	} else {
+		log.Warn("mesh reporting disabled; this prober will keep being counted " +
+			"even when it can reach nothing")
 	}
 
 	select {

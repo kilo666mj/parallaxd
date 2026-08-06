@@ -109,6 +109,15 @@ type Config struct {
 	// WatchInterval is how often staleness is evaluated.
 	WatchInterval time.Duration
 
+	// MeshMaxAge is how old a mesh report may be and still suppress a prober.
+	// Suppression that outlives the partition is indistinguishable from the
+	// outage it was meant to avoid inventing.
+	MeshMaxAge time.Duration
+
+	// MeshMinPeers is how many peers a report must cover before reaching none
+	// of them counts as isolation. Zero applies the mesh package's default.
+	MeshMinPeers int
+
 	FanOutTimeout time.Duration
 	RequestTTL    time.Duration
 	ResultMaxAge  time.Duration
@@ -136,6 +145,9 @@ type Coordinator struct {
 	// componentsFor maps a check name to the components containing it, so a
 	// result only re-evaluates the groupings it can actually affect.
 	componentsFor map[string][]check.Component
+
+	// meshState holds what each prober can currently see of the fleet.
+	meshState *meshState
 
 	// slots bounds concurrent fan-outs.
 	slots chan struct{}
@@ -293,6 +305,7 @@ func New(cfg Config) (*Coordinator, error) {
 		now:             cfg.Now,
 		slots:           make(chan struct{}, cfg.MaxFanOuts),
 		startedAt:       cfg.Now(),
+		meshState:       newMeshState(),
 		states:          map[string]*entityState{},
 		componentStates: map[string]*entityState{},
 		silent:          map[string]bool{},
@@ -307,6 +320,27 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	chk, ok := c.checks[r.Check]
 	if !ok {
 		return quorum.Verdict{}, fmt.Errorf("unknown check %q", r.Check)
+	}
+
+	// An isolated prober's result is not evidence, so it is not a trigger
+	// either. Fanning out on it would spend the corroboration budget on
+	// reports carrying no information — and during a partition, when every
+	// cut-off prober sees every target as down, that is the entire budget,
+	// starving the triggers that do mean something.
+	//
+	// The cost is that a check whose assigned prober is isolated stops being
+	// evaluated until it rejoins. That is a real gap, and it is why isolation
+	// alerts rather than silently suppressing: the operator is told the
+	// prober's checks are no longer being run. Reassigning them to a healthy
+	// prober needs pushed assignments, which is future work.
+	if c.isolatedProbers()[r.Prober] {
+		c.log.Debug("ignoring a result from an isolated prober",
+			"check", chk.Name, "prober", r.Prober)
+		return quorum.Verdict{
+			Check: chk.Name, Status: check.StatusUnknown,
+			Suppressed: 1, SuppressedProbers: []string{r.Prober},
+			Reason: fmt.Sprintf("%s can reach no peer; its result was not counted", r.Prober),
+		}, nil
 	}
 
 	v, alert, kind := c.decide(ctx, chk, r)
@@ -372,6 +406,10 @@ func (c *Coordinator) evaluate(chk check.Check, results []check.Result) quorum.V
 	return quorum.Evaluate(chk, results, quorum.Options{
 		Now:    c.now(),
 		MaxAge: c.cfg.ResultMaxAge,
+		// The Phase 2 rule. A prober that can reach no peer sees every target
+		// as down, and counting that is how one broken uplink becomes a
+		// fleet-wide outage report.
+		Isolated: c.isolatedProbers(),
 	})
 }
 
@@ -588,6 +626,9 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/results", c.handleResult)
 	mux.HandleFunc("GET /v1/health", c.handleHealth)
 	mux.HandleFunc("GET /v1/status", c.handleStatus)
+	mux.HandleFunc("POST /v1/mesh", c.handleMesh)
+	mux.HandleFunc("GET /v1/mesh", c.handleMeshView)
+	mux.HandleFunc("GET /v1/peers", c.handlePeers)
 	mux.HandleFunc("GET /v1/components", c.handleComponents)
 	mux.HandleFunc("GET /v1/export", c.handleExport)
 	mux.HandleFunc("GET /v1/assignments", c.handleAssignments)

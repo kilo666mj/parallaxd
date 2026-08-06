@@ -33,6 +33,19 @@ const (
 
 	// KindReporting is a prober that has started reporting again.
 	KindReporting Kind = "reporting"
+
+	// KindIsolated is a prober that can reach no peer, so its results have
+	// stopped being counted. Distinct from KindSilent: a silent prober said
+	// nothing, an isolated one is still talking but has no working path to
+	// anything and its opinion would be actively misleading.
+	//
+	// It is an alert rather than a quiet suppression because a silenced prober
+	// is a monitoring gap — everything it was the assigned reporter for is now
+	// judged on fewer opinions, or none.
+	KindIsolated Kind = "isolated"
+
+	// KindRejoined is a prober that can see the fleet again.
+	KindRejoined Kind = "rejoined"
 )
 
 // Alert is one thing worth telling someone about — either a single check, or a
@@ -97,6 +110,10 @@ func (a Alert) Summary() string {
 		verb = "SILENT"
 	case KindReporting:
 		verb = "REPORTING"
+	case KindIsolated:
+		verb = "ISOLATED"
+	case KindRejoined:
+		verb = "REJOINED"
 	}
 
 	if a.Prober != "" {
@@ -183,7 +200,7 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 	// Good news at info, problems at warn: an operator filtering for problems
 	// should not have to read the good news to find the bad.
 	switch a.Kind {
-	case KindRecovered, KindReporting:
+	case KindRecovered, KindReporting, KindRejoined:
 		log.Info(a.Summary(), attrs...)
 	default:
 		log.Warn(a.Summary(), attrs...)

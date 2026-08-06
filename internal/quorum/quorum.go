@@ -13,6 +13,10 @@
 //   - Unknown is not a vote. It is a statement about the prober.
 //   - Down wins if it reaches quorum, even when others report up: a target
 //     reachable from two places and not from three is having an outage.
+//   - A prober that can reach no peer is not counted at all. Its results are
+//     not weak evidence to be outvoted; they are not evidence. See
+//     internal/mesh — this is the rule that stops one broken uplink becoming a
+//     fleet-wide outage report.
 //   - Without enough evidence, the verdict is inconclusive rather than up.
 //     Silence is not an all-clear.
 package quorum
@@ -36,6 +40,16 @@ type Options struct {
 	// about the present, and a result from ten minutes ago answers a
 	// different one. Zero disables the check.
 	MaxAge time.Duration
+
+	// Isolated names probers that can currently reach no peer. Their results
+	// are discarded rather than counted: a prober with no working network path
+	// has learned nothing about any target, and its view — that everything is
+	// down — is the single most misleading input this system can receive.
+	//
+	// Passed in rather than looked up, so this package stays pure and the
+	// decision to silence a prober lives in one place (internal/mesh) instead
+	// of being re-derived here.
+	Isolated map[string]bool
 }
 
 // Verdict is the conclusion, with enough detail for an alert to explain
@@ -58,6 +72,17 @@ type Verdict struct {
 	// so a misconfiguration shows up rather than silently weakening quorum.
 	Discarded int
 
+	// Suppressed counts results dropped because their prober could reach no
+	// peer. Reported separately from Discarded because it means something
+	// different and much more interesting: not "someone is misconfigured" but
+	// "part of the fleet cannot see anything, and this verdict was reached
+	// without it".
+	Suppressed int
+
+	// SuppressedProbers names them, so an alert can say whose opinion is
+	// missing rather than quietly reaching a weaker conclusion.
+	SuppressedProbers []string
+
 	// Providers lists the distinct providers among the probers that agreed
 	// with the verdict. "3 of 5, all one provider" is a far weaker claim than
 	// "3 of 5 across three providers", and the reader deserves to know which.
@@ -79,7 +104,20 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 	v := Verdict{Check: c.Name, Status: check.StatusUnknown}
 
 	byProber := map[string]check.Result{}
+	seenSuppressed := map[string]bool{}
 	for _, r := range results {
+		// Before anything else. An isolated prober's result is not weak
+		// evidence to be outvoted — it is not evidence at all, and letting it
+		// reach the counting stage is how one broken uplink becomes a
+		// fleet-wide outage report.
+		if opts.Isolated[r.Prober] {
+			v.Suppressed++
+			if !seenSuppressed[r.Prober] {
+				seenSuppressed[r.Prober] = true
+				v.SuppressedProbers = append(v.SuppressedProbers, r.Prober)
+			}
+			continue
+		}
 		if !usable(c, r, opts) {
 			v.Discarded++
 			continue
@@ -97,6 +135,7 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 		}
 		byProber[r.Prober] = r
 	}
+	sort.Strings(v.SuppressedProbers)
 
 	var down, up []check.Result
 	for _, r := range byProber {
@@ -126,6 +165,13 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 	if v.Counted == 0 {
 		v.Reason = fmt.Sprintf("no prober could form an opinion (%d unknown, %d discarded)",
 			v.Unknown, v.Discarded)
+		if v.Suppressed > 0 {
+			// Said out loud. "Nobody has an opinion" and "everyone who had an
+			// opinion is cut off from the fleet" look the same in the counts
+			// and mean completely different things.
+			v.Reason += fmt.Sprintf("; %d result(s) not counted because %s could reach no peer",
+				v.Suppressed, strings.Join(v.SuppressedProbers, ", "))
+		}
 		return v
 	}
 

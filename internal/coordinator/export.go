@@ -46,15 +46,23 @@ type Export struct {
 	// way to ask a follow-up question.
 	Checks []StatusEntry `json:"checks"`
 
-	// Probers is how many the coordinator knows about. Not a health figure —
-	// nothing here yet says which of them are answering — but a page that
-	// claims corroborated results should show what the corroboration is drawn
-	// from.
+	// Probers is how many the coordinator knows about.
 	Probers int `json:"probers"`
+
+	// Isolated names probers that can currently reach no peer, so their
+	// results are not being counted. A page claiming corroborated results has
+	// to say when the corroboration is running short — otherwise it presents a
+	// verdict reached on two opinions exactly as it would one reached on five.
+	Isolated []string `json:"isolated,omitempty"`
+
+	// Partitioned means several probers are cut off at once, which is the
+	// fleet splitting rather than a host dropping out.
+	Partitioned bool `json:"partitioned,omitempty"`
 }
 
 // Export builds the published document.
 func (c *Coordinator) Export() Export {
+	m := c.Mesh()
 	return Export{
 		Version:     exportVersion,
 		Coordinator: c.cfg.Name,
@@ -62,6 +70,8 @@ func (c *Coordinator) Export() Export {
 		Components:  c.Components(),
 		Checks:      c.Status(),
 		Probers:     len(c.peers),
+		Isolated:    m.Isolated,
+		Partitioned: m.Partitioned,
 	}
 }
 

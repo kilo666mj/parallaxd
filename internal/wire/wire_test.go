@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/mesh"
 )
 
 var now = time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
@@ -437,5 +438,101 @@ func TestDocumentIsDomainSeparated(t *testing.T) {
 	}
 	if _, err := ring.OpenDocument(req); !errors.Is(err, ErrBadSignature) {
 		t.Errorf("OpenDocument on a request = %v, want %v", err, ErrBadSignature)
+	}
+}
+
+func TestMeshReportSigning(t *testing.T) {
+	pub, priv, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ring := NewKeyring()
+	if err := ring.Add("probe-a", pub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	r := mesh.Report{Prober: "probe-a", At: now, Peers: []mesh.PeerView{
+		{Peer: "probe-b", Reachable: true},
+		{Peer: "probe-c", Reachable: false, Detail: "connection refused"},
+	}}
+	env, err := SignMeshReport(priv, r)
+	if err != nil {
+		t.Fatalf("SignMeshReport: %v", err)
+	}
+
+	got, err := ring.OpenMeshReport(env, now)
+	if err != nil {
+		t.Fatalf("OpenMeshReport: %v", err)
+	}
+	if got.Prober != "probe-a" || len(got.Peers) != 2 || got.Reached() != 1 {
+		t.Fatalf("decoded = %+v", got)
+	}
+
+	if _, err := SignMeshReport(priv, mesh.Report{At: now}); err == nil {
+		t.Error("SignMeshReport accepted a report with no prober name")
+	}
+}
+
+// A mesh report silences a prober, so one prober signing on another's behalf
+// would be a way to suppress an opinion — which is how a real outage goes
+// unreported.
+func TestMeshReportIdentityIsBound(t *testing.T) {
+	pubA, privA, _ := GenerateKey()
+	pubB, _, _ := GenerateKey()
+	ring := NewKeyring()
+	if err := ring.Add("probe-a", pubA); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := ring.Add("probe-b", pubB); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// probe-a signs, but the envelope claims probe-b.
+	env, err := SignMeshReport(privA, mesh.Report{Prober: "probe-a", At: now})
+	if err != nil {
+		t.Fatalf("SignMeshReport: %v", err)
+	}
+	env.Peer = "probe-b"
+	if _, err := ring.OpenMeshReport(env, now); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("err = %v, want %v", err, ErrBadSignature)
+	}
+}
+
+// A report must not verify as a result or a request, or a captured one could
+// be replayed to make probers connect somewhere.
+func TestMeshReportIsDomainSeparated(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	ring := NewKeyring()
+	if err := ring.Add("probe-a", pub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	env, err := SignMeshReport(priv, mesh.Report{Prober: "probe-a", At: now})
+	if err != nil {
+		t.Fatalf("SignMeshReport: %v", err)
+	}
+	if _, err := ring.OpenResult(env, now); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("OpenResult on a mesh report = %v, want %v", err, ErrBadSignature)
+	}
+	if _, err := ring.OpenRequest(env, now); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("OpenRequest on a mesh report = %v, want %v", err, ErrBadSignature)
+	}
+	if _, err := ring.OpenDocument(env); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("OpenDocument on a mesh report = %v, want %v", err, ErrBadSignature)
+	}
+}
+
+func TestMeshReportFromTheFutureIsRejected(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	ring := NewKeyring()
+	if err := ring.Add("probe-a", pub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	env, err := SignMeshReport(priv, mesh.Report{Prober: "probe-a", At: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("SignMeshReport: %v", err)
+	}
+	if _, err := ring.OpenMeshReport(env, now); !errors.Is(err, ErrFromTheFuture) {
+		t.Errorf("err = %v, want %v", err, ErrFromTheFuture)
 	}
 }
