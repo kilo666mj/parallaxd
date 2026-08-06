@@ -565,7 +565,7 @@ stated once:
 ```yaml
 parallaxd_checks:
   - name: mx-smtps
-    prober: fleeb          # runs it on its own schedule
+    prober: probe-a        # runs it on its own schedule
     kind: tcp
     target: mx.example.com:465
     vantage: public
