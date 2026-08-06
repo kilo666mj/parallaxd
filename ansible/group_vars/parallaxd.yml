@@ -207,6 +207,127 @@ parallaxd_checks:
     send: "QUIT\r\n"
     quorum: {agree: 2, of: 3, distinct_providers: true}
 
+
+  # ---------------------------------------------------------------------
+  # Absorbed from Uptime Kuma, which measured all of these from a single
+  # container on dock01 — so a dock01 blip read as every site being down at
+  # once. These are the ten that reach the public internet; the .internal
+  # ones wait for internal probers, and the ping monitors wait for an ICMP
+  # check kind.
+  #
+  # Assignment avoids self-checking. Several of these are HOSTED ON a
+  # prober (files/social/matter on fleeb, mxo on hetz01), and a prober
+  # checking a site it serves proves nothing: if the host dies the check
+  # goes stale rather than reporting down, which is a silent gap exactly
+  # where a loud one is wanted.
+  # ---------------------------------------------------------------------
+
+  - name: kilo666-www
+    prober: fleeb
+    kind: http
+    target: https://kilo666.com/
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  # Hosted on fleeb, so fleeb must not be the one asking.
+  - name: mattermost
+    prober: hetz01
+    kind: http
+    target: https://matter.kilo666.com
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: subtotal-status
+    prober: glarb
+    kind: http
+    target: https://status.subtotal.com
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: units-www
+    prober: spike
+    kind: http
+    target: https://units.kilo666.com
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  # Kuma stored a keyword for this one ("Up and processing PHP") but ran it as
+  # a plain status check on the homepage, where that string does not appear —
+  # so it was never enforced and the monitor only ever proved nginx returned
+  # 200. Pointed at the health endpoint the other sites use, matching the
+  # string it actually returns: entanglenet is static, so it says "static
+  # HTML" where the PHP sites say "PHP".
+  - name: entanglenet-www
+    prober: fleeb
+    kind: http
+    target: https://entanglenet.com/server-test.php
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Up and processing static HTML
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  # Hosted on fleeb.
+  - name: files-michaelspost
+    prober: glarb
+    kind: http
+    target: https://files.michaelspost.com/test
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Hi
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: labbookdesigns-www
+    prober: hetz01
+    kind: http
+    target: https://labbookdesigns.com/server-test.php
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Up and processing PHP
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: michaelspost-www
+    prober: spike
+    kind: http
+    target: https://michaelspost.com/server-test.php
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Up and processing PHP
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  # Hosted on hetz01.
+  - name: mxo-michaelspost
+    prober: fleeb
+    kind: http
+    target: https://mxo.michaelspost.com/
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: MX Offenders
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  # Hosted on fleeb.
+  - name: social-mjohnson
+    prober: spike
+    kind: http
+    target: https://social.mjohnson.tech/
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: The social network of the future
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
 parallaxd_components:
   # The MX records are a pool — 10 mx, 20 mxs, 30 mxt — so one host being
   # down does not stop mail arriving. mx_checker alerted on any of them,
@@ -227,6 +348,13 @@ parallaxd_components:
     description: Outbound mail relay
     checks: [mrelay-smtp]
     down_if: any
+
+  # Deliberately no components for the web checks. The MX records are a
+  # genuine pool — redundant members of one service — which is what a rollup
+  # is for. Ten independent sites are not: grouping them by shared host would
+  # turn "kilo666.com is down" into "snuffles-sites are down", which is less
+  # actionable, not more. A component earns its place when a person would
+  # rather hear the group than the member.
 
 # ---------------------------------------------------------------------------
 # Probers
