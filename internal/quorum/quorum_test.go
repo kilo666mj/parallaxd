@@ -303,3 +303,79 @@ func TestNoResultsAtAll(t *testing.T) {
 		t.Errorf("verdict = %+v, want a silent inconclusive", v)
 	}
 }
+
+// The rule Phase 2 exists for. A partitioned prober sees every target as down;
+// counting that is how one broken uplink becomes a fleet-wide outage report.
+func TestIsolatedProberIsNotCounted(t *testing.T) {
+	c := testCheck()
+	c.Quorum = check.Quorum{Agree: 2, Of: 3}
+
+	results := []check.Result{
+		result("probe-a", check.StatusDown, "one"),
+		result("probe-b", check.StatusDown, "two"),
+		result("probe-c", check.StatusUp, "three"),
+	}
+
+	// Without suppression the two agreeing downs carry the verdict.
+	if v := Evaluate(c, results, Options{Now: now}); v.Status != check.StatusDown {
+		t.Fatalf("baseline status = %q, want down", v.Status)
+	}
+
+	// probe-a and probe-b are cut off, so their agreement is one broken
+	// network reported twice, not two vantages agreeing.
+	v := Evaluate(c, results, Options{
+		Now:      now,
+		Isolated: map[string]bool{"probe-a": true, "probe-b": true},
+	})
+	if v.Status == check.StatusDown {
+		t.Fatalf("isolated probers still reached quorum: %+v", v)
+	}
+	if v.Suppressed != 2 {
+		t.Errorf("suppressed = %d, want 2", v.Suppressed)
+	}
+	if len(v.SuppressedProbers) != 2 ||
+		v.SuppressedProbers[0] != "probe-a" || v.SuppressedProbers[1] != "probe-b" {
+		t.Errorf("suppressedProbers = %v, want probe-a and probe-b sorted", v.SuppressedProbers)
+	}
+	// The one prober that could see the fleet said up, and nothing contradicts
+	// it any more.
+	if v.Status != check.StatusUp {
+		t.Errorf("status = %q, want up — the only prober with a working path said so", v.Status)
+	}
+}
+
+// Suppression must not be quietly indistinguishable from having no evidence.
+func TestSuppressionIsExplainedInTheReason(t *testing.T) {
+	c := testCheck()
+	v := Evaluate(c, []check.Result{result("probe-a", check.StatusDown, "one")}, Options{
+		Now:      now,
+		Isolated: map[string]bool{"probe-a": true},
+	})
+
+	if v.Status == check.StatusDown {
+		t.Fatal("an isolated prober alone produced a down verdict")
+	}
+	if !strings.Contains(v.Reason, "could reach no peer") {
+		t.Errorf("reason = %q, want it to say why the result was not counted", v.Reason)
+	}
+	if !strings.Contains(v.Reason, "probe-a") {
+		t.Errorf("reason = %q, want it to name the suppressed prober", v.Reason)
+	}
+}
+
+// Suppression is counted separately from discarding because the two mean very
+// different things: one is a misconfiguration, the other is the network.
+func TestSuppressedIsNotCountedAsDiscarded(t *testing.T) {
+	c := testCheck()
+	v := Evaluate(c, []check.Result{
+		result("probe-a", check.StatusDown, "one"),
+		result("probe-b", check.StatusUp, "two"),
+	}, Options{Now: now, Isolated: map[string]bool{"probe-a": true}})
+
+	if v.Discarded != 0 {
+		t.Errorf("discarded = %d, want 0 — the result was suppressed, not malformed", v.Discarded)
+	}
+	if v.Suppressed != 1 {
+		t.Errorf("suppressed = %d, want 1", v.Suppressed)
+	}
+}

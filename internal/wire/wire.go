@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/mesh"
 )
 
 // Domain separation. A signature over one kind of message must never verify
@@ -39,6 +40,7 @@ const (
 	domainResult  = "parallaxd/result/v1\x00"
 	domainRequest = "parallaxd/request/v1\x00"
 	domainDoc     = "parallaxd/document/v1\x00"
+	domainMesh    = "parallaxd/mesh/v1\x00"
 )
 
 // maxClockSkew bounds how far in the future a signed message may claim to be.
@@ -234,6 +236,42 @@ func (k *Keyring) OpenRequest(e Envelope, now time.Time) (Request, error) {
 	}
 	if err := r.Check.Validate(); err != nil {
 		return Request{}, fmt.Errorf("request carries an invalid check: %w", err)
+	}
+	return r, nil
+}
+
+// SignMeshReport signs a prober's view of which peers it can reach.
+//
+// Signed for the same reason results are: the coordinator acts on this by
+// silencing probers, so an unauthenticated report is a way to suppress a
+// prober's opinion — which is how a real outage goes unreported. The report
+// must come from the prober it claims to be.
+func SignMeshReport(priv ed25519.PrivateKey, r mesh.Report) (Envelope, error) {
+	if r.Prober == "" {
+		return Envelope{}, errors.New("mesh report has no prober name")
+	}
+	return seal(priv, domainMesh, r.Prober, r)
+}
+
+// OpenMeshReport verifies a mesh report envelope.
+func (k *Keyring) OpenMeshReport(e Envelope, now time.Time) (mesh.Report, error) {
+	if err := k.verify(domainMesh, e); err != nil {
+		return mesh.Report{}, err
+	}
+	var r mesh.Report
+	if err := json.Unmarshal(e.Payload, &r); err != nil {
+		return mesh.Report{}, fmt.Errorf("decode mesh report: %w", err)
+	}
+	// The signature proves who signed the bytes; this proves the bytes claim
+	// the same identity. Otherwise a prober could report isolation on another
+	// prober's behalf and have that prober silenced.
+	if r.Prober != e.Peer {
+		return mesh.Report{}, fmt.Errorf("%w: envelope says %q, report says %q",
+			ErrIdentity, e.Peer, r.Prober)
+	}
+	if !now.IsZero() && r.At.After(now.Add(maxClockSkew)) {
+		return mesh.Report{}, fmt.Errorf("%w: report timestamped %s, now is %s",
+			ErrFromTheFuture, r.At.UTC(), now.UTC())
 	}
 	return r, nil
 }
