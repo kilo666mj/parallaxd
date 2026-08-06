@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -28,6 +29,24 @@ import (
 // suppression that outlives the partition is indistinguishable from the
 // outage it was meant to avoid inventing.
 const defaultMeshMaxAge = 3 * time.Minute
+
+const (
+	// credentialTTL bounds how long a signed credential is accepted. Short,
+	// because it is minted per request and a captured one should not be
+	// useful for long.
+	credentialTTL = 2 * time.Minute
+
+	// credentialSkew allows for a prober's clock running slightly fast.
+	credentialSkew = 2 * time.Minute
+)
+
+// proberCredential is what a prober signs to prove it is itself on a read
+// request. Deliberately minimal: identity plus a timestamp is all that is
+// needed, and anything more would be another thing to keep in step.
+type proberCredential struct {
+	Prober string    `json:"prober"`
+	At     time.Time `json:"at"`
+}
 
 // meshState holds the latest report from each prober.
 type meshState struct {
@@ -170,11 +189,19 @@ func (c *Coordinator) reportMeshTransitions(ctx context.Context) {
 // one authoritative list. Two copies kept in step by hand is how a prober ends
 // up probing a peer decommissioned last month and concluding it is isolated.
 //
-// Unauthenticated on purpose: it is the same host:port information every
-// prober already has to connect to, and requiring a signature to fetch it
-// would mean a prober that cannot verify cannot participate in the mesh —
-// failing exactly when the mesh matters.
-func (c *Coordinator) handlePeers(w http.ResponseWriter, _ *http.Request) {
+// The caller must prove it is a registered prober. The response is a map of
+// the entire monitoring fleet — every name and address — which is the single
+// most useful thing here for someone deciding what to attack, and it is the
+// endpoint most likely to end up exposed by a future topology change.
+//
+// Proving it costs the prober nothing: it already holds a signing key, and it
+// signs a report to this same coordinator on every mesh round.
+func (c *Coordinator) handlePeers(w http.ResponseWriter, r *http.Request) {
+	if !c.callerIsAProber(r) {
+		c.log.Warn("refused a peer-list request", "remote", r.RemoteAddr)
+		http.Error(w, "not a registered prober", http.StatusForbidden)
+		return
+	}
 	out := make([]prober.MeshPeer, 0, len(c.peers))
 	for _, p := range c.peers {
 		addr := hostPort(p.URL)
@@ -207,6 +234,48 @@ func hostPort(raw string) string {
 	default:
 		return ""
 	}
+}
+
+// callerIsAProber verifies the signed credential on a read request.
+//
+// The credential is an ordinary signed document carrying a timestamp, so it
+// reuses the machinery already there rather than inventing a second scheme.
+// It expires, so a captured header cannot be replayed indefinitely.
+func (c *Coordinator) callerIsAProber(r *http.Request) bool {
+	raw := r.Header.Get(wire.ProberAuthHeader)
+	if raw == "" {
+		return false
+	}
+	data, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return false
+	}
+	if len(data) > maxRequestBytes {
+		return false
+	}
+	var env wire.Envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return false
+	}
+	payload, err := c.ring.OpenDocument(env)
+	if err != nil {
+		return false
+	}
+	var cred proberCredential
+	if err := json.Unmarshal(payload, &cred); err != nil {
+		return false
+	}
+	if cred.Prober != env.Peer {
+		return false
+	}
+	if _, known := c.byName[cred.Prober]; !known {
+		return false
+	}
+	// Bounded in both directions: an old credential cannot be replayed, and one
+	// from a badly wrong clock is an error rather than a token that outlives
+	// every check applied to it.
+	age := c.now().Sub(cred.At)
+	return age >= -credentialSkew && age <= credentialTTL
 }
 
 func (c *Coordinator) handleMeshView(w http.ResponseWriter, _ *http.Request) {

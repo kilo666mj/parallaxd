@@ -1,0 +1,6 @@
+---
+# ansible-galaxy collection install -r requirements.yml
+collections:
+  # firewalld source rules are what replace transport encryption here, so this
+  # is a hard dependency rather than a convenience.
+  - name: ansible.posix

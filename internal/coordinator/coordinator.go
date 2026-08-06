@@ -712,8 +712,8 @@ func (c *Coordinator) Status() []StatusEntry {
 	out := make([]StatusEntry, 0, len(c.checks))
 	for _, chk := range c.checks {
 		e := StatusEntry{Check: chk.Name, Target: chk.Target, Status: string(check.StatusUnknown)}
-		if p, ok := assign(chk.Name, c.peers); ok {
-			e.AssignedTo = p.Name
+		if name, ok := c.assignedTo(chk); ok {
+			e.AssignedTo = name
 		}
 		c.mu.Lock()
 		st := c.states[chk.Name]

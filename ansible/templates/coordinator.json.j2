@@ -1,0 +1,42 @@
+{
+  "name": "coordinator",
+  "listen": "{{ parallaxd_listen }}",
+  "key_file": "{{ parallaxd_key_dir }}/private",
+
+  "probers": [
+{% for host in groups['parallaxd_probers'] %}
+    {
+      "name": "{{ host }}",
+      "url": "http://{{ hostvars[host]['parallaxd_address'] }}:{{ parallaxd_prober_port }}",
+      "provider": "{{ hostvars[host]['parallaxd_provider'] }}",
+      "public_key": "{{ hostvars[host]['parallaxd_public_key'] }}"
+    }{{ "," if not loop.last }}
+{% endfor %}
+  ],
+
+  "checks": {{ parallaxd_checks | to_nice_json(indent=2) | indent(2) }},
+  "components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
+
+{% if parallaxd_heartbeat_url | length > 0 %}
+  "heartbeat": {
+    "url": "{{ parallaxd_heartbeat_url }}",
+    "interval": "{{ parallaxd_heartbeat_interval }}"{% if parallaxd_heartbeat_headers %},
+    "headers": {{ parallaxd_heartbeat_headers | to_json }}{% endif %}
+
+  },
+{% endif %}
+{% if parallaxd_webhook | length > 0 %}
+  "webhook": "{{ parallaxd_webhook }}",
+{% if parallaxd_webhook_headers %}
+  "webhook_headers": {{ parallaxd_webhook_headers | to_json }},
+{% endif %}
+{% endif %}
+
+  "fan_out_timeout": "{{ parallaxd_fan_out_timeout }}",
+  "request_ttl": "{{ parallaxd_request_ttl }}",
+  "result_max_age": "{{ parallaxd_result_max_age }}",
+  "stale_multiplier": {{ parallaxd_stale_multiplier }},
+  "stale_grace": "{{ parallaxd_stale_grace }}",
+  "watch_interval": "{{ parallaxd_watch_interval }}",
+  "mesh_max_age": "{{ parallaxd_mesh_max_age }}"
+}

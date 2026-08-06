@@ -43,6 +43,12 @@ const (
 	domainMesh    = "parallaxd/mesh/v1\x00"
 )
 
+// ProberAuthHeader carries a prober's signed credential on read requests that
+// have no body to sign. Lives here rather than in either endpoint's package
+// because it is protocol, and because the coordinator already imports the
+// prober package — putting it there would be a cycle.
+const ProberAuthHeader = "X-Parallaxd-Prober"
+
 // maxClockSkew bounds how far in the future a signed message may claim to be.
 // Probers sign with their own clocks, and a wildly wrong one should be a
 // visible error rather than a message that silently outlives every staleness

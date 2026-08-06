@@ -1,0 +1,137 @@
+---
+# parallaxd tunables. Override per host in host_vars/ or inventory.
+
+parallaxd_user: parallaxd
+parallaxd_group: parallaxd
+parallaxd_config_dir: /etc/parallaxd
+parallaxd_key_dir: "{{ parallaxd_config_dir }}/keys"
+
+# Ports. The control API is reachable only from the addresses in the allowlist
+# below; there is no other listener.
+parallaxd_coordinator_port: 8972
+parallaxd_prober_port: 8973
+
+# parallaxd_address is where OTHER NODES reach this host — the service address.
+# Set it per host in the inventory, and set it to an IP.
+#
+# Deliberately not ansible_host. That is how Ansible SSHes here, which on this
+# fleet goes through a jump port and an ~/.ssh/config entry; overloading it
+# would mean choosing between a working deploy and a working control plane.
+# Two different questions, two variables.
+#
+# An IP rather than a name because DNS in the control plane is a dependency in
+# the monitoring path: if resolution fails, every prober stops submitting and
+# the staleness watchdog reports a fleet-wide prober failure — a confidently
+# wrong diagnosis of a DNS incident. firewalld rich rules take addresses
+# anyway, so a name here would need resolving somewhere regardless.
+parallaxd_address: "{{ ansible_host | default(inventory_hostname) }}"
+
+# The coordinator's address as probers reach it.
+parallaxd_coordinator_host: "{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}"
+parallaxd_coordinator_url: "http://{{ parallaxd_coordinator_host }}:{{ parallaxd_coordinator_port }}"
+
+# ---------------------------------------------------------------------------
+# The security model
+#
+# Traffic is signed, not encrypted. Ed25519 both directions gives authenticity,
+# integrity and replay resistance end-to-end — and unlike TLS it survives a
+# proxy, because the signature covers the payload rather than the connection.
+# What it does not give is confidentiality: an on-path observer sees check
+# names, targets and results.
+#
+# The answer to that is the source allowlist rather than a tunnel. The set of
+# peers is small, static and known, so restricting the port to those sources
+# removes the anonymous attacker entirely, with no key material, no certificate
+# lifecycle, and no new failure mode in the alerting path. A monitoring system
+# that goes blind on a forgotten certificate renewal is a worse trade than one
+# that leaks its check names to a transit provider.
+#
+# ** The allowlist must include the other PROBERS, not just the coordinator. **
+# Probers connect to each other for the mesh checks. A rule permitting only the
+# coordinator would break every mesh check, and — because reaching no peer is
+# how isolation is defined — would silently suppress the entire fleet.
+# ---------------------------------------------------------------------------
+
+# Sources permitted to reach a prober's control port: the coordinator, plus
+# every other prober. Built from the inventory so it cannot drift from it.
+parallaxd_prober_allow_sources: >-
+  {{ (groups['parallaxd_coordinator'] | default([]))
+     + (groups['parallaxd_probers'] | default([]))
+     | map('extract', hostvars, 'parallaxd_address')
+     | list }}
+
+# Sources permitted to reach the coordinator's port: every prober.
+parallaxd_coordinator_allow_sources: >-
+  {{ groups['parallaxd_probers'] | default([])
+     | map('extract', hostvars, 'parallaxd_address')
+     | list }}
+
+# ---------------------------------------------------------------------------
+# Coordinator
+# ---------------------------------------------------------------------------
+
+parallaxd_listen: "0.0.0.0:{{ parallaxd_coordinator_port }}"
+
+# The outward dead-man's switch. Without it nothing off the fleet notices if
+# the coordinator dies, and that silence is indistinguishable from everything
+# being fine. Set it to a hosted cron-ping URL.
+parallaxd_heartbeat_url: ""
+parallaxd_heartbeat_interval: 1m
+parallaxd_heartbeat_headers: {}
+
+# Alert destination. The log always gets the alert; this is additional, so a
+# webhook that is down costs the integration and not the record.
+parallaxd_webhook: ""
+parallaxd_webhook_headers: {}
+
+parallaxd_fan_out_timeout: 10s
+parallaxd_request_ttl: 30s
+parallaxd_result_max_age: 2m
+parallaxd_stale_multiplier: 3
+parallaxd_stale_grace: 30s
+parallaxd_watch_interval: 30s
+parallaxd_mesh_max_age: 3m
+
+# Checks and components. Empty by default so a first deploy is inert: the fleet
+# comes up, the mesh converges, and nothing alerts until you have said what to
+# watch.
+#
+# One list, not two. Each check names the prober that runs it in steady state
+# via `prober:`; the coordinator gets the whole list and each prober is
+# templated only its own. Everything else happens on request, which is the
+# cost model — M probes in steady state, N only during an incident.
+#
+#   parallaxd_checks:
+#     - name: mx-smtps
+#       prober: fleeb
+#       kind: tcp
+#       target: mx.example.com:465
+#       vantage: public
+#       interval: 1m
+#       timeout: 10s
+#       quorum: {agree: 2, of: 3, distinct_providers: true}
+#
+# The coordinator honours `prober:` too, so /v1/assignments and Status() report
+# who actually runs each check rather than a hash that disagrees with reality.
+# Omit it and the coordinator picks by rendezvous hashing — but then nothing
+# templates it onto a prober, so nothing runs it. Set it.
+parallaxd_checks: []
+parallaxd_components: []
+
+# ---------------------------------------------------------------------------
+# Probers
+# ---------------------------------------------------------------------------
+
+parallaxd_prober_listen: "0.0.0.0:{{ parallaxd_prober_port }}"
+parallaxd_mesh_interval: 30s
+parallaxd_mesh_timeout: 5s
+
+# Where this prober may connect, independent of what the coordinator asks for.
+# The host's owner decides what is reachable; the coordinator only decides what
+# is worth checking, and the second must not be able to override the first.
+#
+# Empty means "anywhere the built-in and vantage rules permit" — reasonable for
+# a prober on a public network, wrong for one that can route into a LAN. Set an
+# explicit allowlist on any internal prober.
+parallaxd_allow_targets: []
+parallaxd_deny_targets: []

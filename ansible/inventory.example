@@ -1,0 +1,38 @@
+# parallaxd deployment targets. Copy to `inventory` and fill in real hosts —
+# the real file is gitignored, because it is a map of the monitoring fleet and
+# this repository is public.
+#
+# parallaxd_address is where OTHER NODES reach the host, and it is separate
+# from ansible_host on purpose: how Ansible SSHes here and how probers talk to
+# each other are different questions, and on a fleet with a jump port they have
+# different answers. Leave ansible_host alone unless SSH needs it.
+#
+# Set parallaxd_address to an IP. DNS in the control plane is a dependency in
+# the monitoring path: if resolution fails, every prober stops submitting and
+# the staleness watchdog reports a fleet-wide prober failure — a confidently
+# wrong diagnosis of a DNS incident. firewalld rich rules take addresses
+# anyway, so a name would need resolving somewhere regardless.
+#
+# Two groups, and the split matters.
+#
+# [parallaxd_coordinator] — exactly one host, and not also a prober: a host
+# that is both means losing it costs a vantage as well as the decisions.
+#
+# [parallaxd_probers] — one per PROVIDER, not one per host. Three probers
+# behind one provider are one opinion held three times, and the
+# distinct_providers quorum rule exists to refuse exactly that. Three is the
+# floor: isolation requires having failed to reach at least two peers, so below
+# three the partition suppression never fires. Four gives you one spare.
+
+[parallaxd_coordinator]
+coordinator  parallaxd_address=198.51.100.10
+
+[parallaxd_probers]
+probe-a  parallaxd_address=198.51.100.11  parallaxd_provider=provider-one
+probe-b  parallaxd_address=198.51.100.12  parallaxd_provider=provider-two
+probe-c  parallaxd_address=198.51.100.13  parallaxd_provider=provider-three
+probe-d  parallaxd_address=198.51.100.14  parallaxd_provider=provider-four
+
+[parallaxd:children]
+parallaxd_coordinator
+parallaxd_probers

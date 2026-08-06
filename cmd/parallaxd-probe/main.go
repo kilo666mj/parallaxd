@@ -96,6 +96,12 @@ type checkConfig struct {
 	Quorum       check.Quorum  `json:"quorum"`
 	ExpectStatus []int         `json:"expect_status,omitempty"`
 	ExpectBody   string        `json:"expect_body,omitempty"`
+
+	// Prober is accepted and ignored here: the coordinator uses it to know who
+	// runs what, and a prober templated its own checks does not need telling
+	// that they are its own. Present so one check definition can be shared
+	// between both configs without either rejecting the other's fields.
+	Prober string `json:"prober,omitempty"`
 }
 
 func (c checkConfig) toCheck() check.Check {
