@@ -1,0 +1,9 @@
+{
+  "name": "{{ inventory_hostname }}",
+  "listen": "{{ parallaxd_watch_listen }}",
+  "grace": "{{ parallaxd_watch_grace }}",
+  "check_interval": "{{ parallaxd_watch_check_interval }}"{% if parallaxd_watch_webhook | length > 0 %},
+  "webhook": "{{ parallaxd_watch_webhook }}"{% if parallaxd_watch_webhook_headers %},
+  "webhook_headers": {{ parallaxd_watch_webhook_headers | to_json }}{% endif %}{% endif %}
+
+}

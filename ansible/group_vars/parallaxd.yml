@@ -10,6 +10,7 @@ parallaxd_key_dir: "{{ parallaxd_config_dir }}/keys"
 # below; there is no other listener.
 parallaxd_coordinator_port: 8972
 parallaxd_prober_port: 8973
+parallaxd_watch_port: 8974
 
 # parallaxd_address is where OTHER NODES reach this host — the service address.
 # Set it per host in the inventory, and set it to an IP.
@@ -72,12 +73,43 @@ parallaxd_coordinator_allow_sources: >-
 
 parallaxd_listen: "0.0.0.0:{{ parallaxd_coordinator_port }}"
 
-# The outward dead-man's switch. Without it nothing off the fleet notices if
-# the coordinator dies, and that silence is indistinguishable from everything
-# being fine. Set it to a hosted cron-ping URL.
-parallaxd_heartbeat_url: ""
+# The dead-man's switch. Derived from the watcher group rather than set by
+# hand: parallaxd-watch is part of this project precisely so the mechanism does
+# not depend on someone else's service.
+#
+# The watcher must be on a DIFFERENT PROVIDER from the coordinator — not a
+# different company, a different failure domain. On the same host it dies with
+# what it is watching, which is the one thing it must not do.
+#
+# The watch is mutual without a second channel: the watcher alerts when the
+# coordinator stops checking in, and the coordinator alerts (KindUnwatched)
+# when it can no longer deliver here. Either dying alone is reported.
+parallaxd_heartbeat_url: >-
+  {{ ('http://' + hostvars[groups['parallaxd_watch'][0]]['parallaxd_address']
+      + ':' + parallaxd_watch_port|string + '/v1/heartbeat')
+     if (groups['parallaxd_watch'] | default([])) | length > 0 else '' }}
 parallaxd_heartbeat_interval: 1m
 parallaxd_heartbeat_headers: {}
+
+# ---------------------------------------------------------------------------
+# Watcher
+# ---------------------------------------------------------------------------
+
+parallaxd_watch_listen: "0.0.0.0:{{ parallaxd_watch_port }}"
+
+# Five missed beats at the default interval. Tighter and one lost packet pages
+# someone; looser and a dead coordinator goes unnoticed for longer than most
+# outages last.
+parallaxd_watch_grace: 5m
+parallaxd_watch_check_interval: 30s
+
+# The watcher's own alert destination. It should NOT be the same path the
+# coordinator uses if that path depends on the coordinator being up — a watcher
+# that alerted through the thing it watches would be silent in exactly the case
+# it exists for. A self-hosted chat webhook is fine: it does not run on the
+# coordinator.
+parallaxd_watch_webhook: "{{ parallaxd_webhook }}"
+parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
 
 # Alert destination. The log always gets the alert; this is additional, so a
 # webhook that is down costs the integration and not the record.

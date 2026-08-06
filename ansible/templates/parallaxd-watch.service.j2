@@ -1,0 +1,33 @@
+[Unit]
+Description=parallaxd-watch (the far end of the dead-man's switch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ parallaxd_user }}
+Group={{ parallaxd_group }}
+ExecStart=/usr/local/bin/parallaxd-watch -config {{ parallaxd_config_dir }}/watch.json
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+TimeoutStopSec=15
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+PrivateDevices=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# No ReadWritePaths: the watcher holds its state in memory and writes nothing.
+# Losing it on restart is correct — a fresh watcher starts its grace period
+# from now rather than inheriting a stale verdict about a coordinator it has
+# not heard from yet.
+
+[Install]
+WantedBy=multi-user.target

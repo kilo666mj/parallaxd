@@ -157,19 +157,66 @@ func (c *Coordinator) beat(ctx context.Context) {
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		// Logged, not alerted. A missed ping is the external watcher's problem
-		// to notice — that is the entire point of putting it outside — and a
-		// coordinator that alerted about its own heartbeat would be claiming
-		// to report on its own death.
-		c.log.Warn("heartbeat failed", "err", err)
+		c.beatFailed(ctx, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		c.log.Warn("heartbeat rejected", "status", resp.Status)
+		c.beatFailed(ctx, "watcher returned "+resp.Status)
 		return
 	}
+	c.beatSucceeded(ctx)
 	c.log.Debug("heartbeat sent", "stale_checks", body.Stale)
+}
+
+// unwatchedAfter is how many consecutive failed beats before the coordinator
+// says nothing is watching it. More than one, because a single dropped packet
+// is not a dead watcher and this alert should mean something when it arrives.
+const unwatchedAfter = 3
+
+// beatFailed records a failed heartbeat and alerts once the failures are
+// sustained.
+//
+// A coordinator must not claim to report its own death — that is precisely
+// what it cannot do, and why the watcher exists. But **"nothing is watching
+// me" is a different fact**, and the coordinator is the only component
+// positioned to know it. Left unreported, a watcher that died silently means
+// the dead-man's switch is gone and nothing says so, which is the failure the
+// whole mechanism was built to remove, one level up.
+func (c *Coordinator) beatFailed(ctx context.Context, detail string) {
+	c.mu.Lock()
+	c.beatFailures++
+	n := c.beatFailures
+	first := n == unwatchedAfter
+	c.mu.Unlock()
+
+	c.log.Warn("heartbeat failed", "consecutive", n, "detail", detail)
+	if !first {
+		return
+	}
+	a := Alert{
+		Kind: KindUnwatched, At: c.now(),
+		Detail: fmt.Sprintf("%d heartbeats in a row did not reach the watcher (%s); "+
+			"nothing outside this coordinator would notice if it died", n, detail),
+	}
+	if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
+		c.log.Error("could not deliver alert", "kind", string(KindUnwatched), "err", err)
+	}
+}
+
+func (c *Coordinator) beatSucceeded(ctx context.Context) {
+	c.mu.Lock()
+	wasUnwatched := c.beatFailures >= unwatchedAfter
+	c.beatFailures = 0
+	c.mu.Unlock()
+
+	if !wasUnwatched {
+		return
+	}
+	a := Alert{Kind: KindWatched, At: c.now(), Detail: "heartbeats are reaching the watcher again"}
+	if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
+		c.log.Error("could not deliver alert", "kind", string(KindWatched), "err", err)
+	}
 }
 
 func (h Heartbeat) timeout() time.Duration {

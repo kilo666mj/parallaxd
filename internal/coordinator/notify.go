@@ -46,6 +46,24 @@ const (
 
 	// KindRejoined is a prober that can see the fleet again.
 	KindRejoined Kind = "rejoined"
+
+	// KindUnwatched is the coordinator reporting that its heartbeat is not
+	// getting through, so nothing outside it would notice if it died.
+	//
+	// A coordinator must not claim to report its own death — that is what the
+	// watcher is for — but "nothing is watching me" is a different fact and
+	// one it is the only component positioned to know.
+	KindUnwatched Kind = "unwatched"
+
+	// KindWatched is the heartbeat getting through again.
+	KindWatched Kind = "watched"
+
+	// KindWatchLost is the watcher reporting that the coordinator has stopped
+	// checking in. Sent by parallaxd-watch, not by the coordinator.
+	KindWatchLost Kind = "coordinator-silent"
+
+	// KindWatchRecovered is the coordinator checking in again.
+	KindWatchRecovered Kind = "coordinator-returned"
 )
 
 // Alert is one thing worth telling someone about — either a single check, or a
@@ -114,6 +132,24 @@ func (a Alert) Summary() string {
 		verb = "ISOLATED"
 	case KindRejoined:
 		verb = "REJOINED"
+	case KindUnwatched:
+		verb = "UNWATCHED"
+	case KindWatched:
+		verb = "WATCHED"
+	case KindWatchLost:
+		verb = "COORDINATOR SILENT"
+	case KindWatchRecovered:
+		verb = "COORDINATOR RETURNED"
+	}
+
+	// An alert about the watch itself has no check, component or prober to
+	// name; the detail is the whole message.
+	if a.Prober == "" && a.Component == "" && a.Check == "" {
+		fmt.Fprint(&b, verb)
+		if a.Detail != "" {
+			fmt.Fprintf(&b, " — %s", a.Detail)
+		}
+		return b.String()
 	}
 
 	if a.Prober != "" {
@@ -183,6 +219,8 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 	}
 	var attrs []any
 	switch {
+	case a.Prober == "" && a.Component == "" && a.Check == "":
+		attrs = []any{"kind", string(a.Kind)}
 	case a.Prober != "":
 		attrs = []any{"prober", a.Prober, "kind", string(a.Kind), "checks", len(a.Members)}
 	case a.Component != "":
@@ -200,7 +238,7 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 	// Good news at info, problems at warn: an operator filtering for problems
 	// should not have to read the good news to find the bad.
 	switch a.Kind {
-	case KindRecovered, KindReporting, KindRejoined:
+	case KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
 		log.Info(a.Summary(), attrs...)
 	default:
 		log.Warn(a.Summary(), attrs...)
