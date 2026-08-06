@@ -501,6 +501,88 @@ maintenance windows, subscriber notification. The value of those is that a
 person wrote them, and generating them from probe verdicts produces a worse
 page than none — flapping components, protocol jargon, no context.
 
+## Deploying
+
+```sh
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+cp inventory.example inventory   # then edit
+ansible-playbook playbook.yml
+```
+
+Two groups: `parallaxd_coordinator` (exactly one host, and **not** also a
+prober — a host that is both means losing it costs a vantage as well as the
+decisions) and `parallaxd_probers`.
+
+**Size the fleet by provider, not by host.** Three probers behind Hetzner are
+one opinion held three times, and `distinct_providers` exists to refuse exactly
+that. Three probers is the floor — isolation requires having failed to reach at
+least two peers, so below three the partition suppression never fires — and
+four gives you one spare, so a host in maintenance does not silently drop you
+to the floor.
+
+Keys are generated **on each host** and the private half never leaves it. That
+is the point of per-host keypairs: a compromised control machine cannot sign as
+a prober, because it never held the material to.
+
+The play runs in three passes because the configs are mutually dependent — the
+coordinator lists every prober's public key and each prober names the
+coordinator's, so neither can be written before both keypairs exist.
+
+### The security model
+
+**Traffic is signed, not encrypted, and the port is restricted by source.**
+
+Ed25519 both directions gives authenticity, integrity and replay resistance
+end-to-end — and unlike TLS it survives a proxy, because the signature covers
+the payload rather than the connection. What it does not give is
+confidentiality: an on-path observer sees check names, targets and results.
+
+The answer to that is a firewalld source allowlist rather than a tunnel. The
+peer set is small, static and known, so restricting the port to those sources
+removes the anonymous attacker entirely — with no key material, no certificate
+lifecycle, and no new failure mode in the alerting path. *A monitoring system
+that goes blind on a forgotten certificate renewal is a worse trade than one
+that leaks its check names to a transit provider.*
+
+> **The allowlist must include the other probers, not just the coordinator.**
+> Probers connect to each other for the mesh checks. A rule permitting only the
+> coordinator would break every mesh check — and since reaching no peer is how
+> isolation is defined, it would silently suppress the entire fleet.
+
+The playbook builds both lists from the inventory so they cannot drift from it.
+
+If a prober ever ends up on a network where the source set is not static, the
+allowlist stops working and you need real transport security. Reach for
+embedded WireGuard before TLS: no expiry, no CA, and it fails closed rather
+than blinding you on a missed renewal.
+
+### One check list, not two
+
+Probers self-schedule, so who runs what has to be stated somewhere. It is
+stated once:
+
+```yaml
+parallaxd_checks:
+  - name: mx-smtps
+    prober: fleeb          # runs it on its own schedule
+    kind: tcp
+    target: mx.example.com:465
+    vantage: public
+    interval: 1m
+    timeout: 10s
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+```
+
+The coordinator gets the whole list and honours `prober:` too, so
+`/v1/assignments` and `/v1/status` report who *actually* runs each check. Omit
+it and the coordinator falls back to rendezvous hashing — but then nothing
+templates the check onto a prober, so nothing runs it.
+
+Also worth setting on any prober that can route into a LAN: `allow_targets`.
+It defaults to empty, meaning "anywhere the built-in and vantage rules permit",
+which is right for a prober on a public network and wrong for one inside.
+
 ## Prior art
 
 [`rippleFCL/meshmon`](https://github.com/rippleFCL/meshmon) is the closest

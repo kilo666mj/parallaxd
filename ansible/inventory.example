@@ -1,0 +1,26 @@
+# parallaxd deployment targets.
+#
+# Two groups, and the split matters.
+#
+# [parallaxd_coordinator] — exactly one host. It decides everything, so it
+# should not also be a prober: a host that is both means losing it costs a
+# vantage as well as the decisions.
+#
+# [parallaxd_probers] — one per PROVIDER, not one per host. Three probers
+# behind Hetzner are one opinion held three times, and the distinct_providers
+# quorum rule exists to refuse exactly that. Three is the floor: isolation
+# needs a prober to have failed to reach at least two peers, so below three
+# the partition suppression never fires.
+
+[parallaxd_coordinator]
+morty
+
+[parallaxd_probers]
+fleeb    parallaxd_provider=netcup
+spike    parallaxd_provider=oracle
+glarb    parallaxd_provider=racknerd
+hetz01   parallaxd_provider=hetzner
+
+[parallaxd:children]
+parallaxd_coordinator
+parallaxd_probers

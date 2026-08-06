@@ -3,3 +3,10 @@
 *.db
 *.db-wal
 *.db-shm
+
+# Cross-compiled binaries the Ansible play builds before copying them out.
+parallaxd-*-linux-*
+
+# Real inventory holds host names; commit inventory.example instead.
+ansible/inventory
+ansible/host_vars/

@@ -1,0 +1,33 @@
+[Unit]
+Description=parallaxd coordinator (corroborated availability monitoring)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ parallaxd_user }}
+Group={{ parallaxd_group }}
+ExecStart=/usr/local/bin/parallaxd -config {{ parallaxd_config_dir }}/coordinator.json
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# A verdict in flight gets to finish and be delivered rather than being
+# abandoned halfway through an alert.
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+PrivateDevices=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# No ReadWritePaths: the coordinator holds its state in memory and writes
+# nothing. If that ever changes, this line has to change with it.
+
+[Install]
+WantedBy=multi-user.target

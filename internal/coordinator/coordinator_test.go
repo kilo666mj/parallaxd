@@ -718,3 +718,57 @@ func TestQuorumVerdictIsNotReimplemented(t *testing.T) {
 		t.Errorf("coordinator verdict %+v disagrees with quorum %+v", got, want)
 	}
 }
+
+// Probers self-schedule from their own config, so the operator has already
+// decided who runs what. A coordinator that computed a different answer and
+// reported it would disagree with what the fleet was actually doing.
+func TestExplicitProberWinsOverTheHash(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+
+	computed, ok := assign("svc", h.coord.peers)
+	if !ok {
+		t.Fatal("no computed assignment")
+	}
+
+	// Pick a prober the hash did not choose.
+	var other string
+	for _, p := range h.coord.peers {
+		if p.Name != computed.Name {
+			other = p.Name
+			break
+		}
+	}
+
+	chk := h.chk
+	chk.Prober = other
+	h.coord.checks["svc"] = chk
+
+	if got := h.coord.Assignments()[other]; len(got) != 1 || got[0] != "svc" {
+		t.Errorf("assignments[%s] = %v, want the check it was given explicitly", other, got)
+	}
+	if got := h.coord.Assignments()[computed.Name]; len(got) != 0 {
+		t.Errorf("assignments[%s] = %v, want none — the hash was overridden", computed.Name, got)
+	}
+	for _, e := range h.coord.Status() {
+		if e.Check == "svc" && e.AssignedTo != other {
+			t.Errorf("status assigned_to = %q, want %q", e.AssignedTo, other)
+		}
+	}
+}
+
+// Naming a prober that is not registered means nobody the coordinator knows is
+// running the check, which is worth discovering at startup rather than during
+// an incident.
+func TestUnknownExplicitProberFallsBackAndWarns(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+
+	chk := h.chk
+	chk.Prober = "probe-nowhere"
+	h.coord.checks["svc"] = chk
+
+	computed, _ := assign("svc", h.coord.peers)
+	if got := h.coord.Assignments()[computed.Name]; len(got) != 1 {
+		t.Errorf("assignments[%s] = %v, want the fallback to the computed assignment",
+			computed.Name, got)
+	}
+}

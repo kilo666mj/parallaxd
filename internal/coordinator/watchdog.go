@@ -285,8 +285,8 @@ func (c *Coordinator) CheckStaleness(ctx context.Context) {
 	byProber := map[string][]string{}
 	for name := range stale {
 		who := "(unassigned)"
-		if p, ok := assign(name, c.peers); ok {
-			who = p.Name
+		if assigned, ok := c.assignedTo(c.checks[name]); ok {
+			who = assigned
 		}
 		byProber[who] = append(byProber[who], name)
 	}

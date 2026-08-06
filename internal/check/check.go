@@ -67,6 +67,16 @@ type Check struct {
 	// Quorum is how many probers must agree before the result is believed.
 	Quorum Quorum `json:"quorum"`
 
+	// Prober names the prober that runs this check on its own schedule. Empty
+	// means the coordinator picks by rendezvous hashing.
+	//
+	// It exists because probers currently self-schedule from their own config,
+	// so the operator has already decided who runs what. Without a way to say
+	// so, the coordinator would report an assignment computed by a hash while a
+	// different prober actually ran the check — an inconsistency an operator
+	// would have to discover rather than be told.
+	Prober string `json:"prober,omitempty"`
+
 	// ExpectStatus, for HTTP, is the acceptable response code range. Empty
 	// means any 2xx.
 	ExpectStatus []int `json:"expect_status,omitempty"`
