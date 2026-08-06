@@ -55,9 +55,14 @@ parallaxd_coordinator_url: "http://{{ parallaxd_coordinator_host }}:{{ parallaxd
 
 # Sources permitted to reach a prober's control port: the coordinator, plus
 # every other prober. Built from the inventory so it cannot drift from it.
+#
+# The outer parentheses matter. In Jinja `|` binds tighter than `+`, so
+# `a + b | map(...)` is `a + (b | map(...))` — which concatenated the
+# coordinator group RAW with the mapped probers and handed firewalld a
+# hostname. Group the concatenation before piping it.
 parallaxd_prober_allow_sources: >-
-  {{ (groups['parallaxd_coordinator'] | default([]))
-     + (groups['parallaxd_probers'] | default([]))
+  {{ ((groups['parallaxd_coordinator'] | default([]))
+      + (groups['parallaxd_probers'] | default([])))
      | map('extract', hostvars, 'parallaxd_address')
      | list }}
 

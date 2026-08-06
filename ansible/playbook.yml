@@ -56,6 +56,10 @@
       delegate_to: localhost
       become: false
       changed_when: false
+      # Runs in check mode too. It only reads the local checkout, and without
+      # it a --check run has no version to stamp and the build below has
+      # nothing to name.
+      check_mode: false
       register: parallaxd_git_describe
       failed_when: false
 
@@ -89,6 +93,11 @@
       delegate_to: localhost
       become: false
       changed_when: true
+      # Runs in check mode too: it is a local compile with no effect on any
+      # host, and skipping it makes --check fail at the copy tasks with a
+      # missing-file error rather than telling you what would change. A dry
+      # run that cannot complete is not a dry run.
+      check_mode: false
 
     - name: Install the coordinator binary
       ansible.builtin.copy:
@@ -127,17 +136,30 @@
     # unauthenticated heartbeat on purpose (a forged one can only make it
     # believe the coordinator is alive, and anything able to forge one is
     # already inside the source allowlist). So a watch-only host gets no key.
+    # Resolved into a fact rather than inline, because a multi-line Jinja
+    # conditional inside a YAML folded scalar (>-) is not folded: a
+    # more-indented continuation line keeps its newline, and the command
+    # arrives at bash split across two lines. That produced a syntax error
+    # on every host on the first attempt.
+    - name: Resolve which binary mints this host's key
+      ansible.builtin.set_fact:
+        parallaxd_genkey_bin: >-
+          {{ '/usr/local/bin/parallaxd'
+             if inventory_hostname in groups['parallaxd_coordinator']
+             else '/usr/local/bin/parallaxd-probe' }}
+
     - name: Generate a keypair
       when:
         - not parallaxd_existing_key.stat.exists
         - inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
+      # The private key is on stdout. Without this, any failure of this task
+      # prints it into the Ansible log — which is exactly what happened the
+      # first time, leaking five private keys into a file on the control
+      # machine. The whole point of generating on the host is that the key
+      # never travels; logging it undoes that.
+      no_log: true
       ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail;
-          {{ '/usr/local/bin/parallaxd' if inventory_hostname in groups['parallaxd_coordinator']
-             else '/usr/local/bin/parallaxd-probe' }} -genkey
-          | grep -v '^#' | grep -v '^$'
-          > {{ parallaxd_key_dir }}/keypair.tmp
+        cmd: "set -o pipefail; {{ parallaxd_genkey_bin }} -genkey | grep -v '^#' | grep -v '^$' > {{ parallaxd_key_dir }}/keypair.tmp"
         executable: /bin/bash
         creates: "{{ parallaxd_key_dir }}/private"
 
@@ -145,6 +167,8 @@
       when:
         - not parallaxd_existing_key.stat.exists
         - inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
+      # Same reasoning: these touch key material, so a failure must not print it.
+      no_log: true
       block:
         - name: Write the private half
           ansible.builtin.shell:
