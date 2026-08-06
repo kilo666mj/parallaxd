@@ -152,8 +152,81 @@ parallaxd_mesh_max_age: 3m
 # who actually runs each check rather than a hash that disagrees with reality.
 # Omit it and the coordinator picks by rendezvous hashing — but then nothing
 # templates it onto a prober, so nothing runs it. Set it.
-parallaxd_checks: []
-parallaxd_components: []
+parallaxd_checks:
+  # Absorbed from mx_checker, which measured all four from wherever its cron
+  # happened to run. The banner match is the point: a wedged Postfix still
+  # accepts connections on 25, so a bare TCP check would call it healthy.
+  #
+  # send: QUIT hangs up politely. Without it every probe logs "lost connection
+  # after CONNECT" on the far side, and postscreen scores the abrupt
+  # disconnect — a monitor that skipped it could get itself deny-listed by the
+  # server it is watching.
+  #
+  # Spread one per prober so no single vantage carries the whole mail picture.
+  - name: mx-smtp
+    prober: fleeb
+    kind: banner
+    target: mx.michaelspost.com:25
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Postcow
+    send: "QUIT\r\n"
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: mxs-smtp
+    prober: hetz01
+    kind: banner
+    target: mxs.michaelspost.com:25
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Postfix
+    send: "QUIT\r\n"
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: mxt-smtp
+    prober: glarb
+    kind: banner
+    target: mxt.michaelspost.com:25
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Postfix
+    send: "QUIT\r\n"
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: mrelay-smtp
+    prober: spike
+    kind: banner
+    target: mrelay.kilo666.com:25
+    vantage: public
+    interval: 1m
+    timeout: 15s
+    expect_body: Postfix
+    send: "QUIT\r\n"
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+parallaxd_components:
+  # The MX records are a pool — 10 mx, 20 mxs, 30 mxt — so one host being
+  # down does not stop mail arriving. mx_checker alerted on any of them,
+  # which paged for a degradation. down_if: all reports the outage: nobody
+  # can deliver.
+  #
+  # The individual checks still exist and still appear in /v1/status, so
+  # "which one" is a question the export answers. What changes is what wakes
+  # someone up.
+  - name: inbound-mail
+    description: Accepting mail for michaelspost.com and kilo666.com
+    checks: [mx-smtp, mxs-smtp, mxt-smtp]
+    down_if: all
+
+  # mrelay is not an MX. It is the outbound relay, and there is one, so any
+  # failure is the failure.
+  - name: outbound-relay
+    description: Outbound mail relay
+    checks: [mrelay-smtp]
+    down_if: any
 
 # ---------------------------------------------------------------------------
 # Probers
