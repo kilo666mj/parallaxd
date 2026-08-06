@@ -165,6 +165,11 @@ type Coordinator struct {
 	// so a dead one produces one alert rather than one per watch tick.
 	silent map[string]bool
 
+	// beatFailures counts consecutive failed heartbeats, so a sustained
+	// failure is reported once rather than a dropped packet being reported at
+	// all.
+	beatFailures int
+
 	// inflight tracks background processing so shutdown can wait for a
 	// verdict to finish rather than abandoning it half-delivered.
 	inflight sync.WaitGroup

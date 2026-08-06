@@ -478,3 +478,73 @@ func TestExportMarksStaleChecks(t *testing.T) {
 		t.Error("export does not say who was supposed to be running it")
 	}
 }
+
+// A coordinator cannot report its own death — that is what the watcher is for.
+// But "nothing is watching me" is a different fact, and it is the only
+// component positioned to know it. Unreported, a watcher that died silently
+// means the dead-man's switch is gone with nothing saying so.
+func TestSustainedHeartbeatFailureAlerts(t *testing.T) {
+	h := newWatchHarness(t, Config{
+		Checks:    []check.Check{namedCheck("svc")},
+		Heartbeat: Heartbeat{URL: "http://127.0.0.1:1/gone", Interval: time.Minute},
+	})
+
+	// One dropped packet is not a dead watcher.
+	h.coord.beat(t.Context())
+	if n := h.notifier.count(); n != 0 {
+		t.Fatalf("got %d alerts after one failure, want none", n)
+	}
+
+	for range unwatchedAfter {
+		h.coord.beat(t.Context())
+	}
+	alerts := h.notifier.all()
+	if len(alerts) != 1 {
+		t.Fatalf("got %d alerts, want 1: %+v", len(alerts), alerts)
+	}
+	if alerts[0].Kind != KindUnwatched {
+		t.Fatalf("kind = %q, want %q", alerts[0].Kind, KindUnwatched)
+	}
+	if !strings.Contains(alerts[0].Summary(), "would notice if it died") {
+		t.Errorf("summary = %q", alerts[0].Summary())
+	}
+
+	// Not once per failed beat.
+	for range 5 {
+		h.coord.beat(t.Context())
+	}
+	if n := h.notifier.count(); n != 1 {
+		t.Errorf("got %d alerts, want no repeat while it stays unwatched", n)
+	}
+}
+
+func TestHeartbeatRecoveryAlertsOnce(t *testing.T) {
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	h := newWatchHarness(t, Config{
+		Checks:    []check.Check{namedCheck("svc")},
+		Heartbeat: Heartbeat{URL: "http://127.0.0.1:1/gone", Interval: time.Minute},
+	})
+	for range unwatchedAfter {
+		h.coord.beat(t.Context())
+	}
+	if h.notifier.count() != 1 {
+		t.Fatalf("setup: want the unwatched alert")
+	}
+
+	// Point it at something that answers.
+	h.coord.cfg.Heartbeat.URL = srvURL
+	h.coord.beat(t.Context())
+
+	alerts := h.notifier.all()
+	if len(alerts) != 2 || alerts[1].Kind != KindWatched {
+		t.Fatalf("alerts = %+v, want a recovery", alerts)
+	}
+	h.coord.beat(t.Context())
+	if n := h.notifier.count(); n != 2 {
+		t.Errorf("got %d alerts, want no repeat of the recovery", n)
+	}
+}
