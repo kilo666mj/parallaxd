@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -226,15 +227,55 @@ func TestMeshReportCannotSpeakForAnotherProber(t *testing.T) {
 	}
 }
 
+// credentialFor mints the signed proof a prober sends on a read request.
+func (h *harness) credentialFor(t *testing.T, name string, at time.Time) string {
+	t.Helper()
+	env, err := wire.SignDocument(h.probers[name].key, name, struct {
+		Prober string    `json:"prober"`
+		At     time.Time `json:"at"`
+	}{Prober: name, At: at})
+	if err != nil {
+		t.Fatalf("SignDocument: %v", err)
+	}
+	raw, _ := json.Marshal(env)
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func (h *harness) getPeers(t *testing.T, srv *httptest.Server, cred string) (int, []prober.MeshPeer) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/v1/peers", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	if cred != "" {
+		req.Header.Set(wire.ProberAuthHeader, cred)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/peers: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, nil
+	}
+	var peers []prober.MeshPeer
+	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return resp.StatusCode, peers
+}
+
 // Probers fetch the peer list rather than carrying a copy, so there is one
 // authoritative list to keep correct.
-func TestPeerListIsServed(t *testing.T) {
+func TestPeerListIsServedToProbers(t *testing.T) {
 	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
 	srv := httptest.NewServer(h.coord.Handler())
 	defer srv.Close()
 
-	var peers []prober.MeshPeer
-	getJSON(t, srv.URL+"/v1/peers", &peers)
+	code, peers := h.getPeers(t, srv, h.credentialFor(t, "probe-a", time.Now()))
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a registered prober", code)
+	}
 	if len(peers) != 3 {
 		t.Fatalf("peers = %+v, want 3", peers)
 	}
@@ -242,6 +283,58 @@ func TestPeerListIsServed(t *testing.T) {
 		if p.Address == "" {
 			t.Errorf("peer %q has no dialable address", p.Name)
 		}
+	}
+}
+
+// The response maps the whole monitoring fleet, which is the most useful thing
+// here for someone deciding what to attack.
+func TestPeerListRequiresACredential(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+	srv := httptest.NewServer(h.coord.Handler())
+	defer srv.Close()
+
+	if code, _ := h.getPeers(t, srv, ""); code != http.StatusForbidden {
+		t.Errorf("no credential: status = %d, want 403", code)
+	}
+	if code, _ := h.getPeers(t, srv, "not-base64!!"); code != http.StatusForbidden {
+		t.Errorf("garbage credential: status = %d, want 403", code)
+	}
+
+	// Signed by a key the coordinator does not know.
+	_, strangerPriv, err := wire.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	env, err := wire.SignDocument(strangerPriv, "probe-a", struct {
+		Prober string    `json:"prober"`
+		At     time.Time `json:"at"`
+	}{Prober: "probe-a", At: time.Now()})
+	if err != nil {
+		t.Fatalf("SignDocument: %v", err)
+	}
+	raw, _ := json.Marshal(env)
+	forged := base64.StdEncoding.EncodeToString(raw)
+	if code, _ := h.getPeers(t, srv, forged); code != http.StatusForbidden {
+		t.Errorf("forged credential: status = %d, want 403", code)
+	}
+}
+
+// A captured credential must not be useful indefinitely.
+func TestPeerListCredentialExpires(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+	srv := httptest.NewServer(h.coord.Handler())
+	defer srv.Close()
+
+	old := h.credentialFor(t, "probe-a", time.Now().Add(-time.Hour))
+	if code, _ := h.getPeers(t, srv, old); code != http.StatusForbidden {
+		t.Errorf("stale credential: status = %d, want 403", code)
+	}
+
+	// And one from a badly wrong clock is an error, not a token that outlives
+	// every check applied to it.
+	future := h.credentialFor(t, "probe-a", time.Now().Add(time.Hour))
+	if code, _ := h.getPeers(t, srv, future); code != http.StatusForbidden {
+		t.Errorf("future credential: status = %d, want 403", code)
 	}
 }
 

@@ -97,6 +97,11 @@ type checkConfig struct {
 	Quorum       check.Quorum  `json:"quorum"`
 	ExpectStatus []int         `json:"expect_status,omitempty"`
 	ExpectBody   string        `json:"expect_body,omitempty"`
+
+	// Prober names who runs this check on its own schedule. Empty means the
+	// coordinator picks by rendezvous hashing — but nothing then templates the
+	// check onto a prober, so in practice it should be set.
+	Prober string `json:"prober,omitempty"`
 }
 
 func (c checkConfig) toCheck() check.Check {
@@ -104,6 +109,7 @@ func (c checkConfig) toCheck() check.Check {
 		Name: c.Name, Kind: c.Kind, Target: c.Target, Vantage: c.Vantage,
 		Interval: time.Duration(c.Interval), Timeout: time.Duration(c.Timeout),
 		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
+		Prober: c.Prober,
 	}
 }
 

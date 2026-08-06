@@ -1,0 +1,307 @@
+---
+# Deploying parallaxd has an ordering problem worth naming: the coordinator's
+# config lists every prober's public key, and each prober's config names the
+# coordinator's. Neither can be written before both keypairs exist.
+#
+# So the play runs in three passes rather than one:
+#
+#   1. generate keys everywhere, and read the public halves back
+#   2. install probers, whose config needs only the coordinator's public key
+#   3. install the coordinator, whose config needs every prober's
+#
+# Keys are generated on the host and the private half never leaves it. That is
+# the point of per-host keypairs: a compromised control machine cannot sign as
+# a prober, because it never held the material to do so.
+
+- name: Generate parallaxd keypairs
+  hosts: parallaxd
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install firewalld
+      ansible.builtin.package:
+        name: firewalld
+        state: present
+
+    - name: Enable and start firewalld
+      ansible.builtin.systemd:
+        name: firewalld
+        enabled: true
+        state: started
+
+    - name: Create the service account
+      ansible.builtin.user:
+        name: "{{ parallaxd_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        home: "{{ parallaxd_config_dir }}"
+        create_home: false
+
+    - name: Create configuration directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: "{{ parallaxd_group }}"
+        # 0750: the service reads its config, nobody else needs to.
+        mode: "0750"
+      loop:
+        - "{{ parallaxd_config_dir }}"
+        - "{{ parallaxd_key_dir }}"
+
+    - name: Describe the checkout for the version stamp
+      ansible.builtin.command:
+        cmd: git describe --tags --always --dirty
+        chdir: "{{ playbook_dir }}/.."
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      register: parallaxd_git_describe
+      failed_when: false
+
+    - name: Resolve the target architecture
+      ansible.builtin.set_fact:
+        parallaxd_goarch: >-
+          {{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64',
+              'armv7l': 'arm', 'armv6l': 'arm'}.get(
+              ansible_facts['architecture'], ansible_facts['architecture']) }}
+        parallaxd_version: "{{ parallaxd_git_describe.stdout | default('dev', true) | trim }}"
+
+    # Built with -ldflags so a deployed host reports which build it is running.
+    # Without it the binary keeps main.version's "dev" default and `-version`
+    # on a host tells you nothing — a mistake already made twice on this fleet.
+    - name: Build the binaries locally
+      ansible.builtin.command:
+        cmd: >-
+          go build -trimpath
+          -ldflags "-s -w -X main.version={{ parallaxd_version }}"
+          -o {{ playbook_dir }}/../parallaxd-{{ item }}-linux-{{ parallaxd_goarch }}
+          ./cmd/{{ item }}
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        CGO_ENABLED: "0"
+        GOOS: linux
+        GOARCH: "{{ parallaxd_goarch }}"
+      loop:
+        - parallaxd
+        - parallaxd-probe
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Install the coordinator binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../parallaxd-parallaxd-linux-{{ parallaxd_goarch }}"
+        dest: /usr/local/bin/parallaxd
+        mode: "0755"
+      when: inventory_hostname in groups['parallaxd_coordinator']
+      notify: Restart coordinator
+
+    - name: Install the prober binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../parallaxd-parallaxd-probe-linux-{{ parallaxd_goarch }}"
+        dest: /usr/local/bin/parallaxd-probe
+        mode: "0755"
+      when: inventory_hostname in groups['parallaxd_probers']
+      notify: Restart prober
+
+    - name: Check whether a keypair already exists
+      ansible.builtin.stat:
+        path: "{{ parallaxd_key_dir }}/private"
+      register: parallaxd_existing_key
+
+    # Generated once and never regenerated. Rotating a key silently would
+    # orphan the public half held by the other side, and the failure mode is a
+    # prober whose results stop verifying — which reads as a silent prober,
+    # not as a key problem.
+    - name: Generate a keypair
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          {{ '/usr/local/bin/parallaxd' if inventory_hostname in groups['parallaxd_coordinator']
+             else '/usr/local/bin/parallaxd-probe' }} -genkey
+          | grep -v '^#' | grep -v '^$'
+          > {{ parallaxd_key_dir }}/keypair.tmp
+        executable: /bin/bash
+        creates: "{{ parallaxd_key_dir }}/private"
+      when: not parallaxd_existing_key.stat.exists
+
+    - name: Split the keypair
+      when: not parallaxd_existing_key.stat.exists
+      block:
+        - name: Write the private half
+          ansible.builtin.shell:
+            cmd: >-
+              set -o pipefail;
+              head -1 {{ parallaxd_key_dir }}/keypair.tmp > {{ parallaxd_key_dir }}/private
+            executable: /bin/bash
+          changed_when: true
+
+        - name: Write the public half
+          ansible.builtin.shell:
+            cmd: >-
+              set -o pipefail;
+              tail -1 {{ parallaxd_key_dir }}/keypair.tmp > {{ parallaxd_key_dir }}/public
+            executable: /bin/bash
+          changed_when: true
+
+        - name: Remove the combined file
+          ansible.builtin.file:
+            path: "{{ parallaxd_key_dir }}/keypair.tmp"
+            state: absent
+
+    - name: Secure the private key
+      ansible.builtin.file:
+        path: "{{ parallaxd_key_dir }}/private"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+
+    - name: Secure the public key
+      ansible.builtin.file:
+        path: "{{ parallaxd_key_dir }}/public"
+        owner: root
+        group: "{{ parallaxd_group }}"
+        mode: "0444"
+
+    # Read back so the other side's config can be written. Only the public half
+    # is ever fetched; the private half stays on the host that made it.
+    - name: Read the public key
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      register: parallaxd_public_key_raw
+
+    - name: Record the public key
+      ansible.builtin.set_fact:
+        parallaxd_public_key: "{{ parallaxd_public_key_raw.content | b64decode | trim }}"
+
+  handlers:
+    - name: Restart coordinator
+      ansible.builtin.systemd:
+        name: parallaxd
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart prober
+      ansible.builtin.systemd:
+        name: parallaxd-probe
+        state: restarted
+        daemon_reload: true
+
+# ---------------------------------------------------------------------------
+
+- name: Configure probers
+  hosts: parallaxd_probers
+  become: true
+  tasks:
+    - name: Fail when the prober has no provider
+      ansible.builtin.assert:
+        that: parallaxd_provider is defined and parallaxd_provider | length > 0
+        fail_msg: >-
+          {{ inventory_hostname }} has no parallaxd_provider. Quorum uses it to
+          tell three opinions from one opinion held three times; probers with no
+          provider collapse into a single group, so a distinct-providers rule
+          could never be satisfied. Set it in the inventory.
+
+    - name: Deploy the prober configuration
+      ansible.builtin.template:
+        src: probe.json.j2
+        dest: "{{ parallaxd_config_dir }}/probe.json"
+        owner: root
+        group: "{{ parallaxd_group }}"
+        mode: "0640"
+      notify: Restart prober
+
+    - name: Deploy the prober unit
+      ansible.builtin.template:
+        src: parallaxd-probe.service.j2
+        dest: /etc/systemd/system/parallaxd-probe.service
+        mode: "0644"
+      notify: Restart prober
+
+    # The control port is reachable only from the coordinator and the other
+    # probers. Everything else is dropped, which is what replaces transport
+    # encryption here.
+    - name: Allow the coordinator and peers to reach this prober
+      ansible.posix.firewalld:
+        rich_rule: >-
+          rule family="ipv4"
+          source address="{{ item }}"
+          port port="{{ parallaxd_prober_port }}" protocol="tcp"
+          accept
+        zone: public
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ parallaxd_prober_allow_sources }}"
+
+    - name: Enable and start the prober
+      ansible.builtin.systemd:
+        name: parallaxd-probe
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart prober
+      ansible.builtin.systemd:
+        name: parallaxd-probe
+        state: restarted
+        daemon_reload: true
+
+# ---------------------------------------------------------------------------
+
+- name: Configure the coordinator
+  hosts: parallaxd_coordinator
+  become: true
+  tasks:
+    - name: Warn when no heartbeat is configured
+      ansible.builtin.debug:
+        msg: >-
+          parallaxd_heartbeat_url is empty. Nothing outside the fleet will
+          notice if this coordinator dies, and that silence is indistinguishable
+          from everything being fine.
+      when: parallaxd_heartbeat_url | length == 0
+
+    - name: Deploy the coordinator configuration
+      ansible.builtin.template:
+        src: coordinator.json.j2
+        dest: "{{ parallaxd_config_dir }}/coordinator.json"
+        owner: root
+        group: "{{ parallaxd_group }}"
+        mode: "0640"
+      notify: Restart coordinator
+
+    - name: Deploy the coordinator unit
+      ansible.builtin.template:
+        src: parallaxd.service.j2
+        dest: /etc/systemd/system/parallaxd.service
+        mode: "0644"
+      notify: Restart coordinator
+
+    - name: Allow probers to reach the coordinator
+      ansible.posix.firewalld:
+        rich_rule: >-
+          rule family="ipv4"
+          source address="{{ item }}"
+          port port="{{ parallaxd_coordinator_port }}" protocol="tcp"
+          accept
+        zone: public
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ parallaxd_coordinator_allow_sources }}"
+
+    - name: Enable and start the coordinator
+      ansible.builtin.systemd:
+        name: parallaxd
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart coordinator
+      ansible.builtin.systemd:
+        name: parallaxd
+        state: restarted
+        daemon_reload: true

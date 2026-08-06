@@ -3,6 +3,8 @@ package coordinator
 import (
 	"hash/fnv"
 	"sort"
+
+	"github.com/kilo666mj/parallaxd/internal/check"
 )
 
 // assign picks the prober responsible for running a check in steady state.
@@ -48,6 +50,27 @@ func weight(checkName, peerName string) uint64 {
 	return h.Sum64()
 }
 
+// assignedTo reports which prober runs a check in steady state.
+//
+// An explicit Prober wins over the hash. Probers self-schedule from their own
+// config today, so the operator has already made this decision; computing a
+// different answer and reporting it would mean the coordinator's view of the
+// fleet disagreed with what the fleet was doing.
+func (c *Coordinator) assignedTo(chk check.Check) (string, bool) {
+	if chk.Prober != "" {
+		if _, known := c.byName[chk.Prober]; known {
+			return chk.Prober, true
+		}
+		// Named a prober that is not registered. Reported rather than silently
+		// falling back, because the check is not being run by anyone the
+		// coordinator knows and that is worth discovering at startup.
+		c.log.Warn("check names an unregistered prober; falling back to the computed assignment",
+			"check", chk.Name, "prober", chk.Prober)
+	}
+	p, ok := assign(chk.Name, c.peers)
+	return p.Name, ok
+}
+
 // Assignments returns which prober is responsible for each check, keyed by
 // prober name. Probers with nothing assigned are present with an empty list,
 // so a fleet-wide view shows an idle prober rather than omitting it.
@@ -57,8 +80,8 @@ func (c *Coordinator) Assignments() map[string][]string {
 		out[p.Name] = nil
 	}
 	for _, chk := range c.checks {
-		if p, ok := assign(chk.Name, c.peers); ok {
-			out[p.Name] = append(out[p.Name], chk.Name)
+		if name, ok := c.assignedTo(chk); ok {
+			out[name] = append(out[name], chk.Name)
 		}
 	}
 	for name := range out {

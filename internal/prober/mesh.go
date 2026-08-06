@@ -2,6 +2,7 @@ package prober
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -188,6 +189,16 @@ func (p *Prober) fetchPeers(ctx context.Context, cfg MeshConfig) ([]MeshPeer, er
 	if err != nil {
 		return nil, err
 	}
+	// The peer list is a map of the whole monitoring fleet, so the coordinator
+	// only serves it to a prober that can prove it is itself. Minted per
+	// request rather than cached: it carries a timestamp and expires, and a
+	// long-lived one would be worth capturing.
+	cred, err := p.credential()
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set(wire.ProberAuthHeader, cred)
+
 	resp, err := p.meshClient(cfg).Do(req)
 	if err != nil {
 		return nil, err
@@ -230,6 +241,23 @@ func (p *Prober) submitMesh(ctx context.Context, cfg MeshConfig, r mesh.Report) 
 		return fmt.Errorf("coordinator returned %s", resp.Status)
 	}
 	return nil
+}
+
+// credential returns a signed proof that this prober is who it says, for read
+// requests that have no body to sign.
+func (p *Prober) credential() (string, error) {
+	env, err := wire.SignDocument(p.cfg.Key, p.cfg.Name, struct {
+		Prober string    `json:"prober"`
+		At     time.Time `json:"at"`
+	}{Prober: p.cfg.Name, At: p.nowFunc().UTC()})
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
 func (p *Prober) meshClient(cfg MeshConfig) *http.Client {
