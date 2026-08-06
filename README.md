@@ -7,10 +7,10 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: early but complete end to end.** Both binaries build, run, and have
-> been smoke-tested together: a real outage produces exactly one alert and a
-> recovery produces one more. Not deployed anywhere yet, and probers still take
-> their check list from their own config rather than from the coordinator.
+> **Status: Phase 2 complete, not yet deployed.** Both binaries build and run,
+> and the mesh self-checks that justify the design are in. Probers still take
+> their *check* list from their own config rather than from the coordinator —
+> only the peer list is pushed.
 
 ## The problem
 
@@ -88,6 +88,9 @@ it applies these rules in order:
 - **Down wins if it reaches quorum, even when others report up.** A target
   reachable from two vantages and unreachable from three is having an outage,
   and reporting "up" because somebody got through would hide it.
+- **A prober that can reach no peer is not counted at all.** Its results are
+  not weak evidence to be outvoted; they are not evidence. See
+  [the mesh](#the-mesh-telling-i-cannot-reach-this-from-i-cannot-reach-anything).
 - **Without enough evidence the verdict is inconclusive, never up.** Silence is
   not an all-clear.
 
@@ -114,6 +117,11 @@ split brain, and eventually a worse Raft. A coordinator being down is a
 monitoring gap rather than an outage: probers keep probing and nothing alerts.
 That is what [the dead-man's switch](#the-dead-mans-switch) exists to make
 noticeable.
+
+Probers do talk to each other, for [the mesh checks](#the-mesh-telling-i-cannot-reach-this-from-i-cannot-reach-anything).
+That is traffic, not authority: they report what they saw and the coordinator
+decides what it means. A prober that could conclude it was isolated could also
+decline to, which is exactly the power this design keeps out of them.
 
 ## Both directions are signed
 
@@ -306,6 +314,84 @@ is failing. A check that goes quiet holds its component at `unknown` rather
 than being silently read as healthy. The exception is a rollup already
 satisfied: one failing check under `any` takes the component down whether or
 not the others have reported.
+
+## The mesh: telling "I cannot reach this" from "I cannot reach anything"
+
+This is the part that makes parallaxd more than `blackbox_exporter` with a
+K-of-N alert rule.
+
+**A partitioned prober is the worst possible reporter.** It cannot reach the
+target, it cannot reach its peers to corroborate, and its local view says
+everything is down. Corroboration that does not know this turns one broken
+uplink into a confident, fleet-wide outage report — worse than the single false
+alert it was built to prevent, because it arrives with the authority of a
+system that claims to corroborate.
+
+So probers check each other as well as their targets:
+
+```
+GET  /v1/peers   probers fetch the fleet list from the coordinator
+POST /v1/mesh    probers report which peers they could reach, signed
+GET  /v1/mesh    the visibility map
+```
+
+The check is a **TCP connect, deliberately not a health check**. The question
+is whether the network path works, not whether the peer is happy — a peer whose
+store is broken but whose socket answers still proves the reporter has working
+connectivity, which is all that is being asked.
+
+The peer list is served by the coordinator rather than configured on each
+prober, so there is one authoritative list. Two copies kept in step by hand is
+how a prober ends up probing a host decommissioned last month and concluding it
+is isolated.
+
+### The rule
+
+A prober is **isolated** when it reached *none* of its peers, having asked at
+least two. Its results are then discarded rather than counted — not weak
+evidence to be outvoted, but not evidence at all.
+
+**Two peers is a floor, not a default to tune down.** With one peer the
+evidence is ambiguous: "I cannot reach my only peer" and "my only peer is down"
+are identical observations. Guessing wrong silences a prober that was telling
+the truth, and a suppressed prober's outages go unreported — a quiet failure,
+which is worse than the noisy one suppression prevents. So it fails open: when
+the evidence cannot distinguish the two cases, nothing is suppressed.
+
+Several probers isolated at once is reported as a **partition** rather than as
+several host failures, because it points an operator at the network.
+
+### What suppression does and does not do
+
+An isolated prober's result is **not a trigger either**. Fanning out on it would
+spend the corroboration budget on reports carrying no information — and during
+a partition, when every cut-off prober sees every target as down, that is the
+whole budget, starving the triggers that mean something.
+
+The cost is real and worth stating: **a check whose assigned prober is isolated
+stops being evaluated until it rejoins.** That is why isolation *alerts* rather
+than silently suppressing — the operator is told those checks are no longer
+being run. Reassigning them to a healthy prober needs pushed assignments, which
+is not built yet.
+
+Suppression expires with the report that caused it (`mesh_max_age`, default
+3 minutes). Suppression that outlives the partition is indistinguishable from
+the outage it was meant to avoid inventing.
+
+Mesh reports are signed like everything else. A report can silence a prober, so
+an unauthenticated one is a way to suppress somebody's opinion — which is how a
+real outage goes unreported. Identity is bound both ways: one prober cannot
+sign a report on another's behalf.
+
+### The by-product
+
+The visibility map is a genuinely useful second output — which parts of the
+fleet can see which — and it records asymmetry rather than averaging it away. A
+link that works one direction and not the other is a real finding.
+
+`GET /v1/mesh` serves it; `isolated` and `partitioned` also travel in the status
+export, because a page claiming corroborated results has to say when the
+corroboration is running short.
 
 ## The dead-man's switch
 

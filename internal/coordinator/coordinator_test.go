@@ -3,6 +3,7 @@ package coordinator
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -60,6 +61,10 @@ type testProber struct {
 	server   *httptest.Server
 	peer     Peer
 	impl     *prober.Prober
+
+	// key is kept so a test can sign something as this prober — mesh reports
+	// in particular, which the prober's own code signs in production.
+	key ed25519.PrivateKey
 }
 
 type harness struct {
@@ -175,7 +180,7 @@ func newHarness(t *testing.T, n int, q check.Quorum, providers []string) *harnes
 			t.Fatalf("prober.New: %v", err)
 		}
 
-		tp := &testProber{name: name, provider: provider, impl: p}
+		tp := &testProber{name: name, provider: provider, impl: p, key: priv}
 		inner := p.Handler()
 		tp.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/v1/probe" {
