@@ -11,10 +11,23 @@ parallaxd_key_dir: "{{ parallaxd_config_dir }}/keys"
 parallaxd_coordinator_port: 8972
 parallaxd_prober_port: 8973
 
-# The coordinator's address as probers reach it. Must be routable from every
-# prober — they submit results and mesh reports here.
-parallaxd_coordinator_host: "{{ hostvars[groups['parallaxd_coordinator'][0]]['ansible_host']
-                                 | default(groups['parallaxd_coordinator'][0]) }}"
+# parallaxd_address is where OTHER NODES reach this host — the service address.
+# Set it per host in the inventory, and set it to an IP.
+#
+# Deliberately not ansible_host. That is how Ansible SSHes here, which on this
+# fleet goes through a jump port and an ~/.ssh/config entry; overloading it
+# would mean choosing between a working deploy and a working control plane.
+# Two different questions, two variables.
+#
+# An IP rather than a name because DNS in the control plane is a dependency in
+# the monitoring path: if resolution fails, every prober stops submitting and
+# the staleness watchdog reports a fleet-wide prober failure — a confidently
+# wrong diagnosis of a DNS incident. firewalld rich rules take addresses
+# anyway, so a name here would need resolving somewhere regardless.
+parallaxd_address: "{{ ansible_host | default(inventory_hostname) }}"
+
+# The coordinator's address as probers reach it.
+parallaxd_coordinator_host: "{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}"
 parallaxd_coordinator_url: "http://{{ parallaxd_coordinator_host }}:{{ parallaxd_coordinator_port }}"
 
 # ---------------------------------------------------------------------------
@@ -44,13 +57,13 @@ parallaxd_coordinator_url: "http://{{ parallaxd_coordinator_host }}:{{ parallaxd
 parallaxd_prober_allow_sources: >-
   {{ (groups['parallaxd_coordinator'] | default([]))
      + (groups['parallaxd_probers'] | default([]))
-     | map('extract', hostvars, 'ansible_host')
+     | map('extract', hostvars, 'parallaxd_address')
      | list }}
 
 # Sources permitted to reach the coordinator's port: every prober.
 parallaxd_coordinator_allow_sources: >-
   {{ groups['parallaxd_probers'] | default([])
-     | map('extract', hostvars, 'ansible_host')
+     | map('extract', hostvars, 'parallaxd_address')
      | list }}
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 {% for host in groups['parallaxd_probers'] %}
     {
       "name": "{{ host }}",
-      "url": "http://{{ hostvars[host]['ansible_host'] | default(host) }}:{{ parallaxd_prober_port }}",
+      "url": "http://{{ hostvars[host]['parallaxd_address'] }}:{{ parallaxd_prober_port }}",
       "provider": "{{ hostvars[host]['parallaxd_provider'] }}",
       "public_key": "{{ hostvars[host]['parallaxd_public_key'] }}"
     }{{ "," if not loop.last }}

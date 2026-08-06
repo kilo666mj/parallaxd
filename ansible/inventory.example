@@ -2,12 +2,16 @@
 # the real file is gitignored, because it is a map of the monitoring fleet and
 # this repository is public.
 #
-# Use ADDRESSES in ansible_host, not names. DNS in the control plane is a
-# dependency in the monitoring path: if resolution fails, every prober stops
-# submitting and the staleness watchdog reports a fleet-wide prober failure,
-# which is a confidently wrong diagnosis of a DNS incident. firewalld rich
-# rules take addresses anyway and resolve names only once at creation, so an
-# address here keeps one source of truth.
+# parallaxd_address is where OTHER NODES reach the host, and it is separate
+# from ansible_host on purpose: how Ansible SSHes here and how probers talk to
+# each other are different questions, and on a fleet with a jump port they have
+# different answers. Leave ansible_host alone unless SSH needs it.
+#
+# Set parallaxd_address to an IP. DNS in the control plane is a dependency in
+# the monitoring path: if resolution fails, every prober stops submitting and
+# the staleness watchdog reports a fleet-wide prober failure — a confidently
+# wrong diagnosis of a DNS incident. firewalld rich rules take addresses
+# anyway, so a name would need resolving somewhere regardless.
 #
 # Two groups, and the split matters.
 #
@@ -21,13 +25,13 @@
 # three the partition suppression never fires. Four gives you one spare.
 
 [parallaxd_coordinator]
-coordinator  ansible_host=198.51.100.10
+coordinator  parallaxd_address=198.51.100.10
 
 [parallaxd_probers]
-probe-a  ansible_host=198.51.100.11  parallaxd_provider=provider-one
-probe-b  ansible_host=198.51.100.12  parallaxd_provider=provider-two
-probe-c  ansible_host=198.51.100.13  parallaxd_provider=provider-three
-probe-d  ansible_host=198.51.100.14  parallaxd_provider=provider-four
+probe-a  parallaxd_address=198.51.100.11  parallaxd_provider=provider-one
+probe-b  parallaxd_address=198.51.100.12  parallaxd_provider=provider-two
+probe-c  parallaxd_address=198.51.100.13  parallaxd_provider=provider-three
+probe-d  parallaxd_address=198.51.100.14  parallaxd_provider=provider-four
 
 [parallaxd:children]
 parallaxd_coordinator
