@@ -108,17 +108,29 @@ parallaxd_watch_listen: "0.0.0.0:{{ parallaxd_watch_port }}"
 parallaxd_watch_grace: 5m
 parallaxd_watch_check_interval: 30s
 
-# The watcher's own alert destination. It should NOT be the same path the
-# coordinator uses if that path depends on the coordinator being up — a watcher
-# that alerted through the thing it watches would be silent in exactly the case
-# it exists for. A self-hosted chat webhook is fine: it does not run on the
-# coordinator.
+# The watcher's own alert destination. It must not depend on the coordinator
+# being up — a watcher that alerted through the thing it watches would be
+# silent in exactly the case it exists for. A self-hosted chat webhook is fine
+# as long as it does not run on the coordinator host.
+#
+# Fails loudly if unset: parallaxd-watch warns at startup rather than coming up
+# looking healthy.
 parallaxd_watch_webhook: "{{ parallaxd_webhook }}"
 parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
 
 # Alert destination. The log always gets the alert; this is additional, so a
 # webhook that is down costs the integration and not the record.
-parallaxd_webhook: ""
+#
+# Set the real value in a gitignored group_vars/all.yml, NOT in host_vars.
+# The watcher runs on a different host from the coordinator and needs it too;
+# scoped to one host it silently resolves to empty on the other, and
+# parallaxd-watch comes up warning that a dead coordinator would be recorded
+# in its journal and nowhere else.
+# The value comes from a gitignored group_vars/all.yml under a DIFFERENT name.
+# Setting parallaxd_webhook itself there would lose: a named group beats the
+# implicit "all" group, so this default would clobber it and the webhook would
+# silently be empty everywhere.
+parallaxd_webhook: "{{ parallaxd_webhook_url | default('') }}"
 parallaxd_webhook_headers: {}
 
 parallaxd_fan_out_timeout: 10s
@@ -327,6 +339,7 @@ parallaxd_checks:
     timeout: 15s
     expect_body: The social network of the future
     quorum: {agree: 2, of: 3, distinct_providers: true}
+
 
 parallaxd_components:
   # The MX records are a pool — 10 mx, 20 mxs, 30 mxt — so one host being
