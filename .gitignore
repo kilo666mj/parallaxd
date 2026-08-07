@@ -10,3 +10,7 @@ parallaxd-*-linux-*
 # Real inventory holds host names; commit inventory.example instead.
 ansible/inventory
 ansible/host_vars/
+
+# Local secrets for the play (webhook URLs). group_vars/parallaxd.yml is
+# committed; this is not.
+ansible/group_vars/all.yml
