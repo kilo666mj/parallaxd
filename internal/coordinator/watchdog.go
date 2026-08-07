@@ -299,7 +299,7 @@ func (c *Coordinator) watchStaleness(ctx context.Context) {
 // CheckStaleness evaluates which checks have gone quiet and alerts on the
 // transitions. Exported so a test can drive it without a ticker.
 func (c *Coordinator) CheckStaleness(ctx context.Context) {
-	c.releaseMaintenance(ctx)
+	c.releaseSuppressions(ctx)
 	stale := c.staleChecks()
 	now := c.now()
 

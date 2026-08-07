@@ -538,12 +538,57 @@ trust relationship, and the export can be served from storage nobody has to
 trust. Verification and interpretation are separate: `wire.OpenDocument`
 answers "did the coordinator write this" and hands back raw bytes.
 
-Human-written incident updates and subscriber notification deliberately stay
-out. Automatic incident lifecycle is retained durably at
-`GET /v1/incidents`; configured maintenance intervals suppress matching
-notifications while retaining a marked incident record at
-`GET /v1/maintenance`. Human-authored updates remain outside the automatic
-monitor because they require an operator identity and editorial context.
+Automatic incident lifecycle is retained durably at `GET /v1/incidents`.
+Configured maintenance intervals suppress matching notifications while
+retaining a marked incident record at `GET /v1/maintenance`.
+
+An optional operator API adds human ownership without making the public status
+surface writable by accident. The dashboard accepts an operator name and token
+for the current browser tab, then exposes acknowledge, manual resolve, silence
+creation and silence cancellation controls alongside diagnostics. The token is
+kept in `sessionStorage`, is sent only in mutation requests, and is never
+embedded by the coordinator. Set `operator_token_file` to enable mutations;
+when unset, every mutation endpoint returns `503`. Mutations require
+`Authorization: Bearer ...` and record the actor and note in durable state:
+
+The token authenticates the operator but does not encrypt the connection. Use
+these mutations over loopback, an SSH tunnel, or another encrypted private
+transport; do not add the coordinator port to a public firewall allowlist and
+send the bearer token across the internet in cleartext.
+
+```sh
+curl -X POST http://127.0.0.1:8972/v1/incidents/7/acknowledge \
+  -H "Authorization: Bearer $PARALLAXD_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"alice","note":"investigating the upstream route"}'
+
+curl -X POST http://127.0.0.1:8972/v1/incidents/7/resolve \
+  -H "Authorization: Bearer $PARALLAXD_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"alice","note":"manually closed after provider confirmation"}'
+```
+
+Manual resolution closes the incident record but does not falsify the check's
+measured state. The next genuine recovery still moves the check to `up`; a
+later down transition opens a new incident.
+
+Operator-created silences are also durable and auditable. They can target
+checks, components, or probers; an empty scope is fleet-wide. Cancelling or
+expiring a silence immediately delivers any still-active incident it had
+suppressed:
+
+```sh
+curl -X POST http://127.0.0.1:8972/v1/silences \
+  -H "Authorization: Bearer $PARALLAXD_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"mail deploy","ends_at":"2030-01-02T03:04:05Z",\
+       "checks":["mx-smtp"],"actor":"alice","comment":"change 1234"}'
+```
+
+`GET /v1/diagnostics` explains the current effective and preferred owner of
+every check, result-queue pressure, rejected-result counts by reason, and
+notification attempts, failures, and last error. These counters describe the
+current coordinator process; incidents and silences are the durable record.
 
 ## Deploying
 

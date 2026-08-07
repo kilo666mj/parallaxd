@@ -243,6 +243,17 @@
   hosts: parallaxd_watch
   become: true
   tasks:
+    - name: Read the coordinator public key for the watcher
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_watch_coordinator_key_raw
+
+    - name: Record the coordinator public key for the watcher
+      ansible.builtin.set_fact:
+        parallaxd_coordinator_public_key_runtime: >-
+          {{ parallaxd_watch_coordinator_key_raw.content | b64decode | trim }}
+
     - name: Fail when the watcher shares a host with the coordinator
       ansible.builtin.assert:
         that: inventory_hostname not in groups['parallaxd_coordinator']
@@ -299,6 +310,17 @@
   hosts: parallaxd_probers
   become: true
   tasks:
+    - name: Read the coordinator public key for the prober
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_probe_coordinator_key_raw
+
+    - name: Record the coordinator public key for the prober
+      ansible.builtin.set_fact:
+        parallaxd_coordinator_public_key_runtime: >-
+          {{ parallaxd_probe_coordinator_key_raw.content | b64decode | trim }}
+
     - name: Fail when the prober has no provider
       ansible.builtin.assert:
         that: parallaxd_provider is defined and parallaxd_provider | length > 0
@@ -360,6 +382,13 @@
   hosts: parallaxd_coordinator
   become: true
   tasks:
+    - name: Read prober public keys for the coordinator
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['parallaxd_probers'] }}"
+      register: parallaxd_coordinator_prober_keys
+
     - name: Warn when nothing is watching this coordinator
       ansible.builtin.debug:
         msg: >-
@@ -367,6 +396,17 @@
           and nothing will notice if this coordinator dies. That silence is
           indistinguishable from everything being fine.
       when: parallaxd_heartbeat_url | trim | length == 0
+
+    - name: Deploy the operator API token
+      ansible.builtin.copy:
+        content: "{{ parallaxd_operator_token | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/operator-token"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: parallaxd_operator_token | trim | length > 0
+      no_log: true
+      notify: Restart coordinator
 
     - name: Deploy the coordinator configuration
       ansible.builtin.template:

@@ -6,6 +6,6 @@
   "webhook": "{{ parallaxd_watch_webhook }}"{% if parallaxd_watch_webhook_headers %},
 	"webhook_headers": {{ parallaxd_watch_webhook_headers | to_json }}{% endif %}{% endif %},
 	"coordinator_name": "coordinator",
-	"coordinator_key": "{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_public_key'] }}"
+	"coordinator_key": "{{ parallaxd_coordinator_public_key_runtime }}"
 
 }

@@ -18,6 +18,8 @@ type persistedState struct {
 	Silent         map[string]bool            `json:"silent"`
 	Incidents      []Incident                 `json:"incidents"`
 	NextIncidentID uint64                     `json:"next_incident_id"`
+	Silences       []Silence                  `json:"silences,omitempty"`
+	NextSilenceID  uint64                     `json:"next_silence_id,omitempty"`
 }
 type persistedEntity struct {
 	Status      check.Status `json:"status"`
@@ -77,7 +79,7 @@ func (c *Coordinator) snapshot() persistedState {
 	for k, v := range c.componentStates {
 		components[k] = v
 	}
-	s := persistedState{Version: 1, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID}
+	s := persistedState{Version: 2, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID}
 	for k, v := range c.lastScheduled {
 		s.LastScheduled[k] = v
 	}
@@ -112,7 +114,7 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version != 1 {
+	if s.Version != 1 && s.Version != 2 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
 	for k, v := range s.Checks {
@@ -131,5 +133,7 @@ func (c *Coordinator) restore() error {
 	}
 	c.incidents = s.Incidents
 	c.nextIncidentID = s.NextIncidentID
+	c.silences = s.Silences
+	c.nextSilenceID = s.NextSilenceID
 	return nil
 }

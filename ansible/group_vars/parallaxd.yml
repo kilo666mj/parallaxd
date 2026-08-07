@@ -133,6 +133,13 @@ parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
 parallaxd_webhook: "{{ parallaxd_webhook_url | default('') }}"
 parallaxd_webhook_headers: {}
 
+# Enables the authenticated operator API for acknowledging/resolving incidents
+# and creating/cancelling silences. Define parallaxd_operator_token_secret in a
+# gitignored or vaulted group_vars/all.yml. Empty keeps every mutation endpoint
+# disabled. Operators can use the API locally over SSH; exposing it through the
+# firewall requires deliberately adding their source address as well.
+parallaxd_operator_token: "{{ parallaxd_operator_token_secret | default('') }}"
+
 parallaxd_fan_out_timeout: 10s
 parallaxd_request_ttl: 30s
 parallaxd_result_max_age: 2m

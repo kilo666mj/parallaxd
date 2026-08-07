@@ -46,6 +46,10 @@ type config struct {
 	Components  []check.Component         `json:"components,omitempty"`
 	Maintenance []coordinator.Maintenance `json:"maintenance,omitempty"`
 	StateFile   string                    `json:"state_file,omitempty"`
+	// OperatorTokenFile enables authenticated incident and silence mutations.
+	// Keeping the bearer token out of the JSON makes normal config inspection
+	// safe and lets deployment tooling apply tighter file permissions.
+	OperatorTokenFile string `json:"operator_token_file,omitempty"`
 
 	// Webhook, when set, receives every alert as JSON in addition to the log.
 	Webhook        string            `json:"webhook,omitempty"`
@@ -192,6 +196,17 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	var operatorToken string
+	if cfg.OperatorTokenFile != "" {
+		rawToken, err := os.ReadFile(cfg.OperatorTokenFile)
+		if err != nil {
+			return fmt.Errorf("read operator token file: %w", err)
+		}
+		operatorToken = strings.TrimSpace(string(rawToken))
+		if operatorToken == "" {
+			return errors.New("operator token file is empty")
+		}
+	}
 
 	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
 	for _, p := range cfg.Probers {
@@ -221,10 +236,11 @@ func run(configPath string, log *slog.Logger) error {
 
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
-		Components:  cfg.Components,
-		Maintenance: cfg.Maintenance,
-		StateFile:   cfg.StateFile,
-		Notifier:    notifier,
+		Components:    cfg.Components,
+		Maintenance:   cfg.Maintenance,
+		StateFile:     cfg.StateFile,
+		OperatorToken: operatorToken,
+		Notifier:      notifier,
 		Heartbeat: coordinator.Heartbeat{
 			URL:      cfg.Heartbeat.URL,
 			Interval: time.Duration(cfg.Heartbeat.Interval),

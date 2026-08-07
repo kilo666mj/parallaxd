@@ -95,6 +95,11 @@ type Config struct {
 	Maintenance []Maintenance
 	StateFile   string
 
+	// OperatorToken enables authenticated incident and silence mutations.
+	// Read-only status endpoints remain available without it. An empty token
+	// disables every write endpoint rather than exposing control by accident.
+	OperatorToken string
+
 	// Notifier receives alerts. Nil means log only.
 	Notifier Notifier
 
@@ -172,6 +177,9 @@ type Coordinator struct {
 	lastScheduled   map[string]time.Time
 	incidents       []Incident
 	nextIncidentID  uint64
+	silences        []Silence
+	nextSilenceID   uint64
+	diagnostics     Diagnostics
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -342,6 +350,9 @@ func New(cfg Config) (*Coordinator, error) {
 		componentStates: map[string]*entityState{},
 		lastScheduled:   map[string]time.Time{},
 		silent:          map[string]bool{},
+		diagnostics: Diagnostics{
+			RejectedResults: map[string]uint64{},
+		},
 	}
 	if err := coord.restore(); err != nil {
 		return nil, err
@@ -694,7 +705,13 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/assignments", c.handleAssignments)
 	mux.HandleFunc("GET /v1/checks", c.handleChecks)
 	mux.HandleFunc("GET /v1/incidents", c.handleIncidents)
+	mux.HandleFunc("POST /v1/incidents/{id}/acknowledge", c.handleAcknowledgeIncident)
+	mux.HandleFunc("POST /v1/incidents/{id}/resolve", c.handleResolveIncident)
 	mux.HandleFunc("GET /v1/maintenance", c.handleMaintenance)
+	mux.HandleFunc("GET /v1/silences", c.handleSilences)
+	mux.HandleFunc("POST /v1/silences", c.handleCreateSilence)
+	mux.HandleFunc("DELETE /v1/silences/{id}", c.handleDeleteSilence)
+	mux.HandleFunc("GET /v1/diagnostics", c.handleDiagnostics)
 	mux.HandleFunc("GET /", c.handleDashboard)
 	return mux
 }
@@ -702,12 +719,14 @@ func (c *Coordinator) Handler() http.Handler {
 func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 	var env wire.Envelope
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&env); err != nil {
+		c.recordRejectedResult("malformed_envelope")
 		http.Error(w, "malformed envelope", http.StatusBadRequest)
 		return
 	}
 
 	payload, err := c.ring.OpenResult(env, c.now())
 	if err != nil {
+		c.recordRejectedResult("authentication")
 		// A result counts toward a verdict, so an unauthenticated one could
 		// manufacture agreement or forge an all-clear. Refused before it is
 		// looked at.
@@ -716,6 +735,7 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, known := c.checks[payload.Result.Check]; !known {
+		c.recordRejectedResult("unknown_check")
 		// A registered prober reporting a check the coordinator does not have
 		// is a configuration drift, not an attack — but acting on it would
 		// mean alerting about something nobody defined.
@@ -725,6 +745,7 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if payload.RequestID != "" {
+		c.recordRejectedResult("request_bound_result")
 		http.Error(w, "request-bound result is not a scheduled result", http.StatusBadRequest)
 		return
 	}
@@ -733,6 +754,7 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 	preferred, _ := c.baseAssignedTo(chk)
 	returning := preferred == payload.Result.Prober && c.isSilent(payload.Result.Prober)
 	if (!ok || assigned != payload.Result.Prober) && !returning {
+		c.recordRejectedResult("not_assigned")
 		c.log.Warn("result from a prober not assigned to the check",
 			"check", chk.Name, "prober", payload.Result.Prober, "assigned", assigned)
 		http.Error(w, "prober is not assigned to this check", http.StatusForbidden)
@@ -745,6 +767,7 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 		return
 	default:
+		c.recordRejectedResult("queue_full")
 		http.Error(w, "result queue is full", http.StatusServiceUnavailable)
 		return
 	}
@@ -758,6 +781,7 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 	if !payload.Result.At.After(last) {
 		c.mu.Unlock()
 		<-c.resultSlots
+		c.recordRejectedResult("replay_or_out_of_order")
 		http.Error(w, "result is not newer than the last accepted result", http.StatusConflict)
 		return
 	}
