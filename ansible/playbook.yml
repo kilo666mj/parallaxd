@@ -9,9 +9,10 @@
 #   2. install probers, whose config needs only the coordinator's public key
 #   3. install the coordinator, whose config needs every prober's
 #
-# Keys are generated on the host and the private half never leaves it. That is
-# the point of per-host keypairs: a compromised control machine cannot sign as
-# a prober, because it never held the material to do so.
+# Prober keys are generated on their hosts and never leave them. A standby is
+# the deliberate exception for the coordinator identity: it must sign as the
+# same coordinator after promotion, so the primary key is copied only to the
+# standby through Ansible's protected, no-log secret path.
 
 - name: Install binaries and generate keypairs
   hosts: parallaxd
@@ -104,7 +105,7 @@
         src: "{{ playbook_dir }}/../parallaxd-parallaxd-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd
         mode: "0755"
-      when: inventory_hostname in groups['parallaxd_coordinator']
+      when: inventory_hostname in parallaxd_coordinator_nodes
       register: parallaxd_coordinator_binary_install
 
     - name: Install the prober binary
@@ -375,8 +376,118 @@
 
 # ---------------------------------------------------------------------------
 
+- name: Configure the encrypted HA replication link
+  hosts: parallaxd_coordinator:parallaxd_standby
+  become: true
+  pre_tasks:
+    - name: Skip HA setup when no standby is configured
+      ansible.builtin.meta: end_play
+      when: parallaxd_standby_hosts | length == 0
+  tasks:
+    - name: Require exactly one primary and one standby for HA
+      ansible.builtin.assert:
+        that:
+          - groups['parallaxd_coordinator'] | length == 1
+          - parallaxd_standby_hosts | length == 1
+          - groups['parallaxd_coordinator'][0] != parallaxd_standby_hosts[0]
+          - hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_provider'] | default('') | length > 0
+          - hostvars[parallaxd_standby_hosts[0]]['parallaxd_provider'] | default('') | length > 0
+          - hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_provider'] != hostvars[parallaxd_standby_hosts[0]]['parallaxd_provider']
+          - parallaxd_ha_replication_token | trim | length >= 32
+        fail_msg: HA requires one distinct standby, a different provider, and a 32+ character replication token.
+
+    - name: Install WireGuard tooling
+      ansible.builtin.package:
+        name: wireguard-tools
+        state: present
+
+    - name: Generate the dedicated HA WireGuard keypair
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          umask 077;
+          wg genkey | tee {{ parallaxd_key_dir }}/ha-wg-private |
+          wg pubkey > {{ parallaxd_key_dir }}/ha-wg-public
+        executable: /bin/bash
+        creates: "{{ parallaxd_key_dir }}/ha-wg-private"
+      no_log: true
+
+    - name: Secure the HA WireGuard private key
+      ansible.builtin.file:
+        path: "{{ parallaxd_key_dir }}/ha-wg-private"
+        owner: root
+        group: root
+        mode: "0400"
+
+    - name: Read this host's HA WireGuard private key
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/ha-wg-private"
+      register: parallaxd_ha_wireguard_private_raw
+      no_log: true
+
+    - name: Read the primary HA WireGuard public key
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/ha-wg-public"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_ha_primary_public_raw
+
+    - name: Read the standby HA WireGuard public key
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/ha-wg-public"
+      delegate_to: "{{ parallaxd_standby_hosts[0] }}"
+      register: parallaxd_ha_standby_public_raw
+
+    - name: Deploy the HA WireGuard interface
+      ansible.builtin.template:
+        src: ha-wireguard.conf.j2
+        dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
+        owner: root
+        group: root
+        mode: "0400"
+      no_log: true
+      notify: Restart HA WireGuard
+
+    - name: Allow the primary to initiate the HA tunnel
+      ansible.posix.firewalld:
+        rich_rule: >-
+          rule family="ipv4"
+          source address="{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}"
+          port port="{{ parallaxd_ha_wireguard_port }}" protocol="udp"
+          accept
+        zone: public
+        permanent: true
+        immediate: true
+        state: enabled
+      when: inventory_hostname in parallaxd_standby_hosts
+
+    - name: Enable and start the HA WireGuard interface
+      ansible.builtin.systemd:
+        name: "wg-quick@{{ parallaxd_ha_wireguard_interface }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Apply HA WireGuard changes before coordinator configuration
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verify the encrypted HA peer is reachable
+      ansible.builtin.command:
+        cmd: >-
+          ping -c 2 -W 3
+          {{ parallaxd_ha_primary_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_standby_address }}
+      changed_when: false
+
+  handlers:
+    - name: Restart HA WireGuard
+      ansible.builtin.systemd:
+        name: "wg-quick@{{ parallaxd_ha_wireguard_interface }}"
+        state: restarted
+        daemon_reload: true
+
+# ---------------------------------------------------------------------------
+
 - name: Configure the coordinator
-  hosts: parallaxd_coordinator
+  hosts: parallaxd_coordinator:parallaxd_standby
   become: true
   tasks:
     - name: Read prober public keys for the coordinator
@@ -385,6 +496,25 @@
       delegate_to: "{{ item }}"
       loop: "{{ groups['parallaxd_probers'] }}"
       register: parallaxd_coordinator_prober_keys
+
+    - name: Read the primary coordinator private key for the standby
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/private"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_primary_coordinator_private_raw
+      when: inventory_hostname in parallaxd_standby_hosts
+      no_log: true
+
+    - name: Deploy the coordinator identity to the standby
+      ansible.builtin.copy:
+        content: "{{ parallaxd_primary_coordinator_private_raw.content | b64decode | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/coordinator-private"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: inventory_hostname in parallaxd_standby_hosts
+      no_log: true
+      notify: Restart coordinator
 
     - name: Warn when nothing is watching this coordinator
       ansible.builtin.debug:
@@ -402,6 +532,17 @@
         group: "{{ parallaxd_group }}"
         mode: "0400"
       when: parallaxd_operator_token | trim | length > 0
+      no_log: true
+      notify: Restart coordinator
+
+    - name: Deploy the HA replication token
+      ansible.builtin.copy:
+        content: "{{ parallaxd_ha_replication_token | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/replication-token"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: parallaxd_standby_hosts | length > 0
       no_log: true
       notify: Restart coordinator
 
