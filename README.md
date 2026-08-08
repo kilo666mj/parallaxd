@@ -728,9 +728,12 @@ cp inventory.example inventory   # then edit
 ansible-playbook playbook.yml
 ```
 
-Two groups: `parallaxd_coordinator` (exactly one host, and **not** also a
+Three groups: `parallaxd_coordinator` (exactly one host, and **not** also a
 prober — a host that is both means losing it costs a vantage as well as the
-decisions) and `parallaxd_probers`.
+decisions), `parallaxd_probers`, and an optional single-host
+`parallaxd_standby`. The standby must name a different `parallaxd_provider`
+from the primary. It may also be a prober; the deployment keeps its prober and
+coordinator signing identities in separate files.
 
 **Size the fleet by provider, not by host.** Three probers behind Hetzner are
 one opinion held three times, and `distinct_providers` exists to refuse exactly
@@ -739,9 +742,20 @@ least two peers, so below three the partition suppression never fires — and
 four gives you one spare, so a host in maintenance does not silently drop you
 to the floor.
 
-Keys are generated **on each host** and the private half never leaves it. That
-is the point of per-host keypairs: a compromised control machine cannot sign as
-a prober, because it never held the material to.
+Prober keys are generated **on each host** and the private half never leaves
+it. That is the point of per-host keypairs: a compromised control machine
+cannot sign as a prober, because it never held the material. The coordinator
+standby is the explicit exception: after promotion it must retain the same
+identity trusted by the probers, so Ansible copies the primary coordinator key
+to a separate standby-only file with secret-bearing tasks marked `no_log`.
+
+When a standby is present, define a random 32-character-or-longer
+`parallaxd_replication_token_secret` in the gitignored
+`ansible/group_vars/all.yml`. The playbook creates a dedicated
+`wg-parallaxd` point-to-point WireGuard interface between primary and standby;
+replication uses that encrypted address and the public coordinator firewall
+admits replica traffic only from the tunnel. Existing VPN interfaces are not
+modified.
 
 The play runs in three passes because the configs are mutually dependent — the
 coordinator lists every prober's public key and each prober names the

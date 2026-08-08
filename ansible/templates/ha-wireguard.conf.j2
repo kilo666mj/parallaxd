@@ -1,0 +1,14 @@
+[Interface]
+Address = {{ parallaxd_ha_standby_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_primary_address }}/32
+PrivateKey = {{ parallaxd_ha_wireguard_private_raw.content | b64decode | trim }}
+ListenPort = {{ parallaxd_ha_wireguard_port }}
+
+[Peer]
+PublicKey = {{ (parallaxd_ha_primary_public_raw.content if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_standby_public_raw.content) | b64decode | trim }}
+{% if inventory_hostname not in parallaxd_standby_hosts %}
+Endpoint = {{ hostvars[parallaxd_standby_hosts[0]]['parallaxd_address'] }}:{{ parallaxd_ha_wireguard_port }}
+PersistentKeepalive = 30
+AllowedIPs = {{ parallaxd_ha_standby_address }}/32
+{% else %}
+AllowedIPs = {{ parallaxd_ha_primary_address }}/32
+{% endif %}

@@ -28,8 +28,8 @@ PrivateTmp=true
 StateDirectory=parallaxd
 StateDirectoryMode=0700
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-# No ReadWritePaths: the coordinator holds its state in memory and writes
-# nothing. If that ever changes, this line has to change with it.
+# StateDirectory provides the only writable path. It holds durable decisions,
+# pending notifications, observation history, and standby replica state.
 
 [Install]
 WantedBy=multi-user.target
