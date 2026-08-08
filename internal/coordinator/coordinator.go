@@ -225,6 +225,30 @@ type entityState struct {
 
 	since       time.Time
 	lastVerdict time.Time
+
+	// Suspicion is deliberately separate from the decided status. A failed
+	// probe that cannot yet reach quorum is operationally important even
+	// though it is not enough evidence to declare the service down.
+	suspectedSince       time.Time
+	lastAttempt          time.Time
+	lastCorroboration    time.Duration
+	inconclusiveAttempts uint64
+	lastInconclusive     string
+	inconclusiveHistory  []CorroborationAttempt
+}
+
+const maxInconclusiveHistory = 32
+
+// CorroborationAttempt is one failed attempt to turn suspicion into a verdict.
+// The bounded history explains repeated delays without allowing state to grow
+// forever during a long partition.
+type CorroborationAttempt struct {
+	At         time.Time `json:"at"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+	Reason     string    `json:"reason"`
+	Counted    int       `json:"counted,omitempty"`
+	Down       int       `json:"down,omitempty"`
+	Up         int       `json:"up,omitempty"`
 }
 
 // reported returns what to show a reader. A stale check is unknown however
@@ -426,13 +450,13 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 		}, nil
 	}
 
-	v, alert, kind := c.decide(ctx, chk, r)
+	v, alert, kind, suspectedAt := c.decide(ctx, chk, r)
 
 	// A check inside a component alerts through the component, so an mx host
 	// going down produces one alert naming the failing ports rather than one
 	// per port. A check in no component is still its own alert.
 	if alert && len(c.componentsFor[chk.Name]) == 0 {
-		a := Alert{Check: chk.Name, Target: chk.Target, Kind: kind, At: c.now(), Verdict: v}
+		a := Alert{Check: chk.Name, Target: chk.Target, Kind: kind, At: c.now(), SuspectedAt: suspectedAt, Verdict: v}
 		c.emit(ctx, a)
 	}
 
@@ -449,12 +473,14 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 // decide runs the check's own state machine and reports whether the transition
 // is worth telling someone about. The state lock is confined here so callers
 // can safely take other locks afterwards.
-func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Result) (quorum.Verdict, bool, Kind) {
+func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Result) (quorum.Verdict, bool, Kind, time.Time) {
 	st := c.stateFor(chk.Name)
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
 	results := []check.Result{r}
+	attemptAt := c.now()
+	var corroborationStarted time.Time
 
 	// Only a failure is worth asking about. An up result already answers the
 	// question, and corroborating it would spend N probes to confirm what one
@@ -464,6 +490,7 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 	// (Agree: 1): the operator has said one prober suffices, so asking others
 	// would change nothing.
 	if r.Status == check.StatusDown && !c.evaluate(chk, results).Actionable() {
+		corroborationStarted = time.Now()
 		results = append(results, c.corroborate(ctx, chk, r)...)
 	} else if r.Status == check.StatusUp && st.status == check.StatusDown && chk.Quorum.Agree > 1 {
 		// A recovery is a decision too. Requiring corroboration here prevents one
@@ -478,17 +505,51 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 		v.Reason = fmt.Sprintf("recovery unconfirmed: %d of %d reported up, quorum needs %d",
 			v.Up, v.Counted, chk.Quorum.Agree)
 	}
-	st.lastVerdict = c.now()
+	now := c.now()
+	st.lastVerdict = now
 	// It just reported, so whatever the watchdog last concluded about its
 	// silence is out of date. Cleared here rather than waiting for the next
 	// watch tick, so a returning prober is visible immediately.
 	st.stale = false
 
-	alert, kind := st.apply(v.Status, c.now())
+	if r.Status == check.StatusDown {
+		if st.suspectedSince.IsZero() {
+			st.suspectedSince = attemptAt
+		}
+		st.lastAttempt = attemptAt
+		if !corroborationStarted.IsZero() {
+			st.lastCorroboration = time.Since(corroborationStarted)
+		}
+		if v.Status == check.StatusUnknown {
+			st.inconclusiveAttempts++
+			st.lastInconclusive = v.Reason
+			st.inconclusiveHistory = append(st.inconclusiveHistory, CorroborationAttempt{
+				At: attemptAt, DurationMS: st.lastCorroboration.Milliseconds(),
+				Reason: v.Reason, Counted: v.Counted, Down: v.Down, Up: v.Up,
+			})
+			if len(st.inconclusiveHistory) > maxInconclusiveHistory {
+				st.inconclusiveHistory = append([]CorroborationAttempt(nil), st.inconclusiveHistory[len(st.inconclusiveHistory)-maxInconclusiveHistory:]...)
+			}
+		}
+	} else if v.Status == check.StatusUp {
+		st.clearSuspicion()
+	}
+
+	suspectedAt := st.suspectedSince
+	alert, kind := st.apply(v.Status, now)
 	if !alert {
 		c.log.Debug("verdict", "check", chk.Name, "status", string(v.Status), "reason", v.Reason)
 	}
-	return v, alert, kind
+	return v, alert, kind, suspectedAt
+}
+
+func (s *entityState) clearSuspicion() {
+	s.suspectedSince = time.Time{}
+	s.lastAttempt = time.Time{}
+	s.lastCorroboration = 0
+	s.inconclusiveAttempts = 0
+	s.lastInconclusive = ""
+	s.inconclusiveHistory = nil
 }
 
 func recoveryConfirmed(chk check.Check, v quorum.Verdict) bool {
@@ -849,12 +910,18 @@ func (c *Coordinator) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 // StatusEntry is the coordinator's current view of one check.
 type StatusEntry struct {
-	Check       string    `json:"check"`
-	Target      string    `json:"target"`
-	Status      string    `json:"status"`
-	Since       time.Time `json:"since,omitempty"`
-	LastVerdict time.Time `json:"last_verdict,omitempty"`
-	AssignedTo  string    `json:"assigned_to,omitempty"`
+	Check                string                 `json:"check"`
+	Target               string                 `json:"target"`
+	Status               string                 `json:"status"`
+	Since                time.Time              `json:"since,omitempty"`
+	LastVerdict          time.Time              `json:"last_verdict,omitempty"`
+	AssignedTo           string                 `json:"assigned_to,omitempty"`
+	SuspectedSince       time.Time              `json:"suspected_since,omitempty"`
+	LastAttempt          time.Time              `json:"last_attempt,omitempty"`
+	LastCorroborationMS  int64                  `json:"last_corroboration_ms,omitempty"`
+	InconclusiveAttempts uint64                 `json:"inconclusive_attempts,omitempty"`
+	LastInconclusive     string                 `json:"last_inconclusive_reason,omitempty"`
+	InconclusiveHistory  []CorroborationAttempt `json:"inconclusive_history,omitempty"`
 
 	// Stale means nobody is reporting on this check any more, so Status is
 	// unknown regardless of how it last looked. A status page must render this
@@ -882,6 +949,12 @@ func (c *Coordinator) Status() []StatusEntry {
 			st.mu.Lock()
 			e.Status = string(st.reported())
 			e.Since, e.LastVerdict = st.since, st.lastVerdict
+			e.SuspectedSince = st.suspectedSince
+			e.LastAttempt = st.lastAttempt
+			e.LastCorroborationMS = st.lastCorroboration.Milliseconds()
+			e.InconclusiveAttempts = st.inconclusiveAttempts
+			e.LastInconclusive = st.lastInconclusive
+			e.InconclusiveHistory = append([]CorroborationAttempt(nil), st.inconclusiveHistory...)
 			if st.stale {
 				// Named separately so a reader can tell "nobody is watching
 				// this" from "the probers disagreed", which are very different

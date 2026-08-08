@@ -95,6 +95,10 @@ type Alert struct {
 	Kind Kind      `json:"kind"`
 	At   time.Time `json:"at"`
 
+	// SuspectedAt is the first failed observation in the chain that eventually
+	// reached quorum. At remains the decision time.
+	SuspectedAt time.Time `json:"suspected_at,omitempty"`
+
 	// Verdict is the corroboration detail, and is only meaningful on a check
 	// alert: a component has no probers of its own to agree or dissent.
 	Verdict quorum.Verdict `json:"verdict,omitzero"`
@@ -184,6 +188,12 @@ func (a Alert) Summary() string {
 		} else if a.Detail != "" {
 			fmt.Fprintf(&b, " — %s", a.Detail)
 		}
+		if a.Kind == KindDown && !a.SuspectedAt.IsZero() {
+			latency := a.At.Sub(a.SuspectedAt).Round(time.Second)
+			if latency >= time.Second {
+				fmt.Fprintf(&b, "; first suspected %s earlier", latency)
+			}
+		}
 		return b.String()
 	}
 
@@ -193,6 +203,12 @@ func (a Alert) Summary() string {
 	}
 	if len(a.Verdict.Dissent) > 0 {
 		fmt.Fprintf(&b, "; dissenting: %s", strings.Join(a.Verdict.Dissent, ", "))
+	}
+	if a.Kind == KindDown && !a.SuspectedAt.IsZero() {
+		latency := a.At.Sub(a.SuspectedAt).Round(time.Second)
+		if latency >= time.Second {
+			fmt.Fprintf(&b, "; first suspected %s earlier", latency)
+		}
 	}
 	return b.String()
 }

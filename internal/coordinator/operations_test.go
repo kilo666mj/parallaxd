@@ -70,6 +70,36 @@ func TestStateAndIncidentHistorySurviveRestart(t *testing.T) {
 	}
 }
 
+func TestSuspectTimelineSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	cfg := durableConfig(t, path, &fakeNotifier{}, nil)
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Millisecond)
+	last := first.Add(4 * time.Minute)
+	st := c.stateFor("svc")
+	st.mu.Lock()
+	st.suspectedSince = first
+	st.lastAttempt = last
+	st.lastCorroboration = 1200 * time.Millisecond
+	st.inconclusiveAttempts = 3
+	st.lastInconclusive = "2 of 3 reported down, quorum needs 3"
+	st.inconclusiveHistory = []CorroborationAttempt{{At: last, DurationMS: 1200, Reason: st.lastInconclusive, Counted: 2, Down: 2}}
+	st.mu.Unlock()
+	c.persist()
+
+	restored, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := restored.Status()[0]
+	if !status.SuspectedSince.Equal(first) || !status.LastAttempt.Equal(last) || status.LastCorroborationMS != 1200 || status.InconclusiveAttempts != 3 || status.LastInconclusive == "" || len(status.InconclusiveHistory) != 1 {
+		t.Fatalf("restored suspect timeline = %+v", status)
+	}
+}
+
 func TestMaintenanceSuppressesDeliveryButRecordsIncident(t *testing.T) {
 	now := time.Now()
 	n := &fakeNotifier{}

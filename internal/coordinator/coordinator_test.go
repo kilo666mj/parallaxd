@@ -405,10 +405,16 @@ func TestInconclusiveDoesNotClearADown(t *testing.T) {
 // nothing rather than counting as agreement.
 func TestUnreachableCorroboratorIsNotAVote(t *testing.T) {
 	h := newHarness(t, 3, check.Quorum{Agree: 3, Of: 3}, nil)
+	now := time.Now().UTC()
+	h.coord.now = func() time.Time { return now }
+	// Keep the first observation fresh while the test advances decision time.
+	h.coord.cfg.ResultMaxAge = time.Hour
 	h.target.down()
 	h.probers["probe-c"].server.Close()
 
-	v, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusDown))
+	r := h.reportFrom("probe-a", check.StatusDown)
+	r.At = now
+	v, err := h.coord.Process(t.Context(), r)
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -421,6 +427,60 @@ func TestUnreachableCorroboratorIsNotAVote(t *testing.T) {
 	}
 	if h.notifier.count() != 0 {
 		t.Errorf("an unmet quorum produced %d alerts", h.notifier.count())
+	}
+	diagnostics := h.coord.DiagnosticState().Checks
+	if len(diagnostics) != 1 || !diagnostics[0].SuspectedSince.Equal(now) || diagnostics[0].InconclusiveAttempts != 1 {
+		t.Fatalf("suspect diagnostics = %+v", diagnostics)
+	}
+	if diagnostics[0].LastInconclusiveReason == "" {
+		t.Error("inconclusive attempt did not retain its reason")
+	}
+	if len(diagnostics[0].InconclusiveHistory) != 1 || diagnostics[0].InconclusiveHistory[0].Down != 2 {
+		t.Fatalf("inconclusive history = %+v", diagnostics[0].InconclusiveHistory)
+	}
+
+	// Once the missing vantage returns, the eventual alert retains when the
+	// outage was first observed rather than presenting quorum time as onset.
+	p := h.probers["probe-c"]
+	inner := p.impl.Handler()
+	p.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/probe" {
+			p.asked.Add(1)
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(p.server.Close)
+	p.peer.URL = p.server.URL
+	h.coord.byName[p.name] = p.peer
+	for i := range h.coord.peers {
+		if h.coord.peers[i].Name == p.name {
+			h.coord.peers[i] = p.peer
+		}
+	}
+	now = now.Add(2 * time.Second)
+	r = h.reportFrom("probe-a", check.StatusDown)
+	r.At = now
+	if _, err := h.coord.Process(t.Context(), r); err != nil {
+		t.Fatalf("Process after corroborator returned: %v", err)
+	}
+	alerts := h.notifier.all()
+	if len(alerts) != 1 || !alerts[0].SuspectedAt.Equal(now.Add(-2*time.Second)) {
+		t.Fatalf("alerts = %+v", alerts)
+	}
+	if summary := alerts[0].Summary(); !strings.Contains(summary, "first suspected 2s earlier") {
+		t.Fatalf("summary = %q", summary)
+	}
+
+	h.target.up(t)
+	now = now.Add(2 * time.Second)
+	r = h.reportFrom("probe-a", check.StatusUp)
+	r.At = now
+	if _, err := h.coord.Process(t.Context(), r); err != nil {
+		t.Fatalf("Process recovery: %v", err)
+	}
+	status := h.coord.Status()[0]
+	if !status.SuspectedSince.IsZero() || status.InconclusiveAttempts != 0 || len(status.InconclusiveHistory) != 0 {
+		t.Fatalf("recovery retained suspect state: %+v", status)
 	}
 }
 
