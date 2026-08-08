@@ -651,8 +651,73 @@ curl -X POST http://127.0.0.1:8972/v1/silences \
 `GET /v1/diagnostics` explains the current effective and preferred owner of
 every check, result-queue pressure, rejected-result counts by reason, and
 notification attempts, pending count, oldest queued delivery, and
-per-destination errors. Attempt counters describe the current process;
+per-destination errors. It also reports the coordinator's HA role, last
+successful replica sync, replication lag, and most recent replication error.
+Attempt counters describe the current process;
 incidents, silences, and the notification outbox are durable.
+
+### Warm standby coordinator
+
+A standby can continuously copy the primary's decision state, incidents,
+silences, pending notification outbox, and observation history. It serves
+read-only status while following the primary and does not schedule checks,
+accept results, send heartbeats, or deliver alerts. There is deliberately no
+automatic election: two coordinators acting at once could duplicate alerts and
+make conflicting decisions during a partition.
+
+Configure the primary with a replication token stored outside its JSON:
+
+```json
+"ha": {
+  "role": "primary",
+  "replication_token_file": "/etc/parallaxd/keys/replication-token"
+}
+```
+
+Configure a host in a different failure domain with durable state and history,
+the same replication token, an operator token, and the primary's private
+coordinator key:
+
+```json
+"state_file": "/var/lib/parallaxd/state.json",
+"history_file": "/var/lib/parallaxd/observations.jsonl",
+"operator_token_file": "/etc/parallaxd/keys/operator-token",
+"ha": {
+  "role": "standby",
+  "primary_url": "https://primary.internal:8972",
+  "replication_token_file": "/etc/parallaxd/keys/replication-token",
+  "interval": "30s",
+  "timeout": "2m"
+}
+```
+
+The shared coordinator key is required because probers trust that identity;
+the standby must not mint a different one. Copy it through a secret manager or
+another audited encrypted channel. Protect the replication path with HTTPS or
+a private encrypted network because the bearer token and replicated state are
+otherwise visible on the wire.
+
+Failover is an operator procedure:
+
+1. Fence the old primary so it cannot run or accept traffic.
+2. Check `GET /v1/ha` on the standby and assess its last sync and any error.
+3. Promote it with an authenticated request that explicitly records the
+   fencing decision:
+
+   ```sh
+   curl -X POST https://standby.internal:8972/v1/ha/promote \
+     -H 'Authorization: Bearer OPERATOR_TOKEN' \
+     -H 'Content-Type: application/json' \
+     -d '{"actor":"alice","confirm_primary_fenced":true}'
+   ```
+
+4. Move the coordinator service address (VIP, load balancer, or DNS) to the
+   promoted host and verify prober submissions and pending-alert delivery.
+
+Promotion is fsynced before the API reports success and survives restart. It
+is intentionally one-way; returning service to the old host means rebuilding
+that host as a standby from the current active coordinator. `GET /v1/replica`
+is bearer-authenticated and disabled when no replication token is configured.
 
 ## Deploying
 
