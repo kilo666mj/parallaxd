@@ -119,6 +119,12 @@ type Config struct {
 	NotificationRetryMax      time.Duration
 	NotificationRetryInterval time.Duration
 
+	// HistoryFile is an append-only observation journal. Retention bounds the
+	// queryable window and HistoryMaxPerCheck bounds memory and compaction size.
+	HistoryFile        string
+	HistoryRetention   time.Duration
+	HistoryMaxPerCheck int
+
 	// Heartbeat is the outward dead-man's switch: something off the fleet that
 	// alerts when this coordinator stops pinging it. Without one, a
 	// coordinator that dies takes the alerting with it and the silence is
@@ -200,6 +206,8 @@ type Coordinator struct {
 	outbox          []Delivery
 	nextDeliveryID  uint64
 	escalated       map[string]time.Time
+	history         map[string][]Observation
+	historyAppends  int
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -215,6 +223,7 @@ type Coordinator struct {
 	inflight   sync.WaitGroup
 	persistMu  sync.Mutex
 	deliveryMu sync.Mutex
+	historyMu  sync.Mutex
 }
 
 // entityState is what the coordinator remembers about one thing it reports on
@@ -317,6 +326,9 @@ func New(cfg Config) (*Coordinator, error) {
 	}
 	if err := validateNotificationConfig(cfg); err != nil {
 		return nil, err
+	}
+	if cfg.HistoryRetention < 0 || cfg.HistoryMaxPerCheck < 0 {
+		return nil, errors.New("history retention and max_per_check cannot be negative")
 	}
 
 	ring := wire.NewKeyring()
@@ -425,11 +437,15 @@ func New(cfg Config) (*Coordinator, error) {
 		},
 		destinations: map[string]Notifier{"default": cfg.Notifier},
 		escalated:    map[string]time.Time{},
+		history:      map[string][]Observation{},
 	}
 	for _, destination := range cfg.Destinations {
 		coord.destinations[destination.Name] = destination.Notifier
 	}
 	if err := coord.restore(); err != nil {
+		return nil, err
+	}
+	if err := coord.loadHistory(); err != nil {
 		return nil, err
 	}
 	return coord, nil
@@ -463,7 +479,9 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	//
 	// Dynamic assignment moves an isolated owner's scheduled checks to a healthy
 	// peer. Results already in flight from the isolated peer remain non-evidence.
-	if c.isolatedProbers()[r.Prober] {
+	isolated := c.isolatedProbers()[r.Prober]
+	if isolated {
+		c.recordObservation(chk, r, "scheduled", true, check.StatusUnknown)
 		c.log.Debug("ignoring a result from an isolated prober",
 			"check", chk.Name, "prober", r.Prober)
 		return quorum.Verdict{
@@ -474,6 +492,7 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	}
 
 	v, alert, kind, suspectedAt := c.decide(ctx, chk, r)
+	c.recordObservation(chk, r, "scheduled", r.Vantage != chk.Vantage, v.Status)
 
 	// A check inside a component alerts through the component, so an mx host
 	// going down produces one alert naming the failing ports rather than one
@@ -514,12 +533,20 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 	// would change nothing.
 	if r.Status == check.StatusDown && !c.evaluate(chk, results).Actionable() {
 		corroborationStarted = time.Now()
-		results = append(results, c.corroborate(ctx, chk, r)...)
+		corroborated := c.corroborate(ctx, chk, r)
+		for _, result := range corroborated {
+			c.recordObservation(chk, result, "corroboration", result.Vantage != chk.Vantage, "")
+		}
+		results = append(results, corroborated...)
 	} else if r.Status == check.StatusUp && st.status == check.StatusDown && chk.Quorum.Agree > 1 {
 		// A recovery is a decision too. Requiring corroboration here prevents one
 		// compromised assigned prober from clearing an incident by itself, while
 		// keeping the steady-state cost at one probe when the check is healthy.
-		results = append(results, c.corroborate(ctx, chk, r)...)
+		corroborated := c.corroborate(ctx, chk, r)
+		for _, result := range corroborated {
+			c.recordObservation(chk, result, "corroboration", result.Vantage != chk.Vantage, "")
+		}
+		results = append(results, corroborated...)
 	}
 
 	v := c.evaluate(chk, results)
@@ -825,6 +852,8 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/silences/{id}", c.handleDeleteSilence)
 	mux.HandleFunc("GET /v1/diagnostics", c.handleDiagnostics)
 	mux.HandleFunc("GET /v1/deliveries", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) })
+	mux.HandleFunc("GET /v1/history", c.handleHistory)
+	mux.HandleFunc("GET /v1/history/summary", c.handleHistorySummary)
 	mux.HandleFunc("GET /", c.handleDashboard)
 	return mux
 }

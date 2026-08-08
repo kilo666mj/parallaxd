@@ -16,6 +16,7 @@ type Diagnostics struct {
 	Notifications   NotificationDiagnostics `json:"notifications"`
 	Assignments     []AssignmentDiagnostic  `json:"assignments"`
 	Checks          []CheckDiagnostic       `json:"checks"`
+	History         HistoryDiagnostics      `json:"history"`
 }
 
 type QueueDiagnostics struct {
@@ -40,6 +41,13 @@ type DestinationDiagnostics struct {
 	LastAttempt time.Time `json:"last_attempt,omitempty"`
 	LastSuccess time.Time `json:"last_success,omitempty"`
 	LastError   string    `json:"last_error,omitempty"`
+}
+
+type HistoryDiagnostics struct {
+	Retained      int       `json:"retained"`
+	WriteFailures uint64    `json:"write_failures"`
+	LastWrite     time.Time `json:"last_write,omitzero"`
+	LastError     string    `json:"last_error,omitempty"`
 }
 
 type AssignmentDiagnostic struct {
@@ -117,6 +125,16 @@ func (c *Coordinator) DiagnosticState() Diagnostics {
 
 	out.GeneratedAt = c.now().UTC()
 	out.ResultQueue = QueueDiagnostics{Depth: len(c.resultSlots), Capacity: cap(c.resultSlots)}
+	c.historyMu.Lock()
+	cutoff := c.now().UTC().Add(-c.historyRetention())
+	for _, observations := range c.history {
+		for _, observation := range observations {
+			if !observation.ReceivedAt.Before(cutoff) {
+				out.History.Retained++
+			}
+		}
+	}
+	c.historyMu.Unlock()
 	c.mu.Lock()
 	out.Notifications.Pending = len(c.outbox)
 	for _, delivery := range c.outbox {

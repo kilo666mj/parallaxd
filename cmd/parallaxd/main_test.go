@@ -132,6 +132,9 @@ func TestValidateConfigAcceptsNotificationRoutingAndEscalation(t *testing.T) {
 	doc["notification_retry_initial"] = "10s"
 	doc["notification_retry_max"] = "5m"
 	doc["notification_retry_interval"] = "2s"
+	doc["history_file"] = filepath.Join(t.TempDir(), "observations.jsonl")
+	doc["history_retention"] = "720h"
+	doc["history_max_per_check"] = 10000
 	raw, err = json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
