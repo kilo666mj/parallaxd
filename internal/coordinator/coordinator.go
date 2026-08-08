@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
@@ -124,6 +125,8 @@ type Config struct {
 	HistoryFile        string
 	HistoryRetention   time.Duration
 	HistoryMaxPerCheck int
+	HA                 HAConfig
+	SkipRestore        bool
 
 	// Heartbeat is the outward dead-man's switch: something off the fleet that
 	// alerts when this coordinator stops pinging it. Without one, a
@@ -208,6 +211,14 @@ type Coordinator struct {
 	escalated       map[string]time.Time
 	history         map[string][]Observation
 	historyAppends  int
+	promoted        atomic.Bool
+	promoteCh       chan struct{}
+	promoteOnce     sync.Once
+	promotedAt      time.Time
+	promotedBy      string
+	lastReplicaSync time.Time
+	primaryStateAt  time.Time
+	lastReplicaErr  string
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -224,6 +235,7 @@ type Coordinator struct {
 	persistMu  sync.Mutex
 	deliveryMu sync.Mutex
 	historyMu  sync.Mutex
+	haMu       sync.Mutex
 }
 
 // entityState is what the coordinator remembers about one thing it reports on
@@ -329,6 +341,9 @@ func New(cfg Config) (*Coordinator, error) {
 	}
 	if cfg.HistoryRetention < 0 || cfg.HistoryMaxPerCheck < 0 {
 		return nil, errors.New("history retention and max_per_check cannot be negative")
+	}
+	if err := validateHAConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	ring := wire.NewKeyring()
@@ -438,15 +453,18 @@ func New(cfg Config) (*Coordinator, error) {
 		destinations: map[string]Notifier{"default": cfg.Notifier},
 		escalated:    map[string]time.Time{},
 		history:      map[string][]Observation{},
+		promoteCh:    make(chan struct{}),
 	}
 	for _, destination := range cfg.Destinations {
 		coord.destinations[destination.Name] = destination.Notifier
 	}
-	if err := coord.restore(); err != nil {
-		return nil, err
-	}
-	if err := coord.loadHistory(); err != nil {
-		return nil, err
+	if !cfg.SkipRestore {
+		if err := coord.restore(); err != nil {
+			return nil, err
+		}
+		if err := coord.loadHistory(); err != nil {
+			return nil, err
+		}
 	}
 	return coord, nil
 }
@@ -854,8 +872,17 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/deliveries", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) })
 	mux.HandleFunc("GET /v1/history", c.handleHistory)
 	mux.HandleFunc("GET /v1/history/summary", c.handleHistorySummary)
+	mux.HandleFunc("GET /v1/replica", c.handleReplica)
+	mux.HandleFunc("GET /v1/ha", c.handleHAStatus)
+	mux.HandleFunc("POST /v1/ha/promote", c.handlePromote)
 	mux.HandleFunc("GET /", c.handleDashboard)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c.isStandby() && standbyBlocks(r) {
+			http.Error(w, "coordinator is a read-only standby", http.StatusServiceUnavailable)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
@@ -953,9 +980,13 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Coordinator) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	status := "ok"
+	if c.isStandby() {
+		status = "standby"
+	}
 	writeJSON(w, map[string]any{
 		"coordinator": c.cfg.Name,
-		"status":      "ok",
+		"status":      status,
 		"probers":     len(c.peers),
 		"checks":      len(c.checks),
 	})

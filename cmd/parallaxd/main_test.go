@@ -146,3 +146,36 @@ func TestValidateConfigAcceptsNotificationRoutingAndEscalation(t *testing.T) {
 		t.Fatalf("validateConfig: %v", err)
 	}
 }
+
+func TestValidateConfigAcceptsDurableStandby(t *testing.T) {
+	path := validConfigFile(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	tokenFile := filepath.Join(dir, "replication-token")
+	if err := os.WriteFile(tokenFile, []byte("replica-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	doc["state_file"] = filepath.Join(dir, "state.json")
+	doc["history_file"] = filepath.Join(dir, "history.jsonl")
+	doc["ha"] = map[string]any{
+		"role": "standby", "primary_url": "https://primary.example", "replication_token_file": tokenFile,
+		"interval": "15s", "timeout": "1m",
+	}
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfig(path, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("validateConfig: %v", err)
+	}
+}

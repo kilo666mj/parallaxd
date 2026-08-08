@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -24,6 +25,7 @@ const (
 // Observation is one prober's accepted result, before quorum folds multiple
 // vantages into a verdict.
 type Observation struct {
+	ID         string       `json:"id"`
 	Check      string       `json:"check"`
 	Kind       check.Kind   `json:"kind"`
 	Target     string       `json:"target"`
@@ -84,6 +86,7 @@ func (c *Coordinator) recordObservation(chk check.Check, result check.Result, so
 		Detail: result.Detail, Source: source, Suppressed: suppressed, Verdict: verdict,
 	}
 	observation.addProtocolMetadata()
+	observation.ensureID()
 	c.historyMu.Lock()
 	c.appendHistoryLocked(observation)
 	if c.cfg.HistoryFile != "" {
@@ -104,6 +107,20 @@ func (c *Coordinator) recordObservation(chk check.Check, result check.Result, so
 		}
 	}
 	c.historyMu.Unlock()
+}
+
+func (o *Observation) ensureID() {
+	if o.ID != "" {
+		return
+	}
+	raw, _ := json.Marshal(struct {
+		Check                  string
+		Prober                 string
+		ObservedAt, ReceivedAt time.Time
+		Source                 string
+	}{o.Check, o.Prober, o.ObservedAt, o.ReceivedAt, o.Source})
+	sum := sha256.Sum256(raw)
+	o.ID = fmt.Sprintf("%x", sum[:16])
 }
 
 func (c *Coordinator) recordHistoryWrite(err error) {
@@ -138,22 +155,31 @@ func (o *Observation) addProtocolMetadata() {
 }
 
 func appendObservation(path string, observation Observation) error {
+	return appendObservations(path, []Observation{observation})
+}
+
+func appendObservations(path string, observations []Observation) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	raw, err := json.Marshal(observation)
-	if err != nil {
 		return err
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
-	if _, err = file.Write(append(raw, '\n')); err == nil {
+	encoder := json.NewEncoder(file)
+	for _, observation := range observations {
+		if err = encoder.Encode(observation); err != nil {
+			break
+		}
+	}
+	if err == nil {
 		err = file.Sync()
 	}
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
+	}
+	if err == nil {
+		err = syncDirectory(filepath.Dir(path))
 	}
 	return err
 }
@@ -197,6 +223,7 @@ func (c *Coordinator) loadHistory() error {
 			dropped = true
 			continue
 		}
+		observation.ensureID()
 		if _, ok := c.checks[observation.Check]; !ok || observation.ReceivedAt.Before(c.now().UTC().Add(-c.historyRetention())) {
 			dropped = true
 			continue
@@ -255,7 +282,10 @@ func (c *Coordinator) compactHistoryLocked() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, c.cfg.HistoryFile)
+	if err := os.Rename(name, c.cfg.HistoryFile); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
 }
 
 func (c *Coordinator) History(checkName string, since time.Time, limit int) []Observation {
