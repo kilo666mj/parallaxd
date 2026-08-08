@@ -17,6 +17,7 @@ type Diagnostics struct {
 	Assignments     []AssignmentDiagnostic  `json:"assignments"`
 	Checks          []CheckDiagnostic       `json:"checks"`
 	History         HistoryDiagnostics      `json:"history"`
+	HA              HAStatus                `json:"ha"`
 }
 
 type QueueDiagnostics struct {
@@ -124,6 +125,7 @@ func (c *Coordinator) DiagnosticState() Diagnostics {
 	c.mu.Unlock()
 
 	out.GeneratedAt = c.now().UTC()
+	out.HA = c.HAStatus()
 	out.ResultQueue = QueueDiagnostics{Depth: len(c.resultSlots), Capacity: cap(c.resultSlots)}
 	c.historyMu.Lock()
 	cutoff := c.now().UTC().Add(-c.historyRetention())

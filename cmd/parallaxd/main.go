@@ -66,6 +66,7 @@ type config struct {
 	HistoryFile               string                          `json:"history_file,omitempty"`
 	HistoryRetention          duration                        `json:"history_retention,omitempty"`
 	HistoryMaxPerCheck        int                             `json:"history_max_per_check,omitempty"`
+	HA                        haConfig                        `json:"ha,omitempty"`
 
 	// Heartbeat is the outward dead-man's switch. Without it nothing outside
 	// the fleet notices if this coordinator dies, and the resulting silence
@@ -88,6 +89,14 @@ type notificationDestinationConfig struct {
 	Name    string            `json:"name"`
 	Webhook string            `json:"webhook"`
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+type haConfig struct {
+	Role                 string   `json:"role,omitempty"`
+	PrimaryURL           string   `json:"primary_url,omitempty"`
+	ReplicationTokenFile string   `json:"replication_token_file,omitempty"`
+	Interval             duration `json:"interval,omitempty"`
+	Timeout              duration `json:"timeout,omitempty"`
 }
 
 type escalationConfig struct {
@@ -312,6 +321,17 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 			return config{}, nil, errors.New("operator token file is empty")
 		}
 	}
+	var replicationToken string
+	if cfg.HA.ReplicationTokenFile != "" {
+		rawToken, err := os.ReadFile(cfg.HA.ReplicationTokenFile)
+		if err != nil {
+			return config{}, nil, fmt.Errorf("read replication token file: %w", err)
+		}
+		replicationToken = strings.TrimSpace(string(rawToken))
+		if replicationToken == "" {
+			return config{}, nil, errors.New("replication token file is empty")
+		}
+	}
 
 	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
 	for _, p := range cfg.Probers {
@@ -346,17 +366,11 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 			Probers: policy.Probers, Kinds: policy.Kinds})
 	}
 
-	stateFile := cfg.StateFile
-	historyFile := cfg.HistoryFile
-	if !restoreState {
-		stateFile = ""
-		historyFile = ""
-	}
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
 		Components:                cfg.Components,
 		Maintenance:               cfg.Maintenance,
-		StateFile:                 stateFile,
+		StateFile:                 cfg.StateFile,
 		OperatorToken:             operatorToken,
 		Notifier:                  coordinator.LogNotifier{Logger: log},
 		Destinations:              destinations,
@@ -365,9 +379,12 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		NotificationRetryInitial:  time.Duration(cfg.NotificationRetryInitial),
 		NotificationRetryMax:      time.Duration(cfg.NotificationRetryMax),
 		NotificationRetryInterval: time.Duration(cfg.NotificationRetryInterval),
-		HistoryFile:               historyFile,
+		HistoryFile:               cfg.HistoryFile,
 		HistoryRetention:          time.Duration(cfg.HistoryRetention),
 		HistoryMaxPerCheck:        cfg.HistoryMaxPerCheck,
+		HA: coordinator.HAConfig{Role: cfg.HA.Role, PrimaryURL: cfg.HA.PrimaryURL,
+			Token: replicationToken, Interval: time.Duration(cfg.HA.Interval), Timeout: time.Duration(cfg.HA.Timeout)},
+		SkipRestore: !restoreState,
 		Heartbeat: coordinator.Heartbeat{
 			URL:      cfg.Heartbeat.URL,
 			Interval: time.Duration(cfg.Heartbeat.Interval),
