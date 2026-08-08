@@ -294,8 +294,9 @@ func (c *Coordinator) processDeliveries(ctx context.Context) {
 	c.deliveryMu.Lock()
 	defer c.deliveryMu.Unlock()
 	now := c.now().UTC()
-	c.scheduleEscalations(now)
-	c.persist()
+	if c.scheduleEscalations(now) {
+		c.persist()
+	}
 
 	c.mu.Lock()
 	items := append([]Delivery(nil), c.outbox...)
@@ -362,12 +363,13 @@ func (c *Coordinator) escalationRelevant(item Delivery) bool {
 	return false
 }
 
-func (c *Coordinator) scheduleEscalations(now time.Time) {
+func (c *Coordinator) scheduleEscalations(now time.Time) bool {
 	if len(c.cfg.Escalations) == 0 {
-		return
+		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	changed := false
 	for _, incident := range c.incidents {
 		if !incident.Active || incident.AcknowledgedAt != nil || incident.Suppressed {
 			continue
@@ -388,8 +390,10 @@ func (c *Coordinator) scheduleEscalations(now time.Time) {
 			c.outbox = append(c.outbox, Delivery{ID: c.nextDeliveryID, Destination: policy.Destination,
 				Alert: a, CreatedAt: now, NextAttempt: now, Escalation: policy.Name, IncidentID: incident.ID})
 			c.escalated[key] = now
+			changed = true
 		}
 	}
+	return changed
 }
 
 // cancelEscalationsLocked removes pending escalations when an incident is no
