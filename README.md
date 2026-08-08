@@ -258,6 +258,14 @@ what trains people to filter the channel. Down alerts once, recovery alerts
 once, and an **inconclusive verdict does not clear a down** — not being able to
 confirm an outage is not evidence that it ended.
 
+An inconclusive failure is retained as a **suspect timeline** rather than
+disappearing. `GET /v1/status`, `GET /v1/export`, and `GET /v1/diagnostics`
+expose the first suspicion, latest corroboration attempt and duration, attempt
+count, and latest reason quorum could not decide. If later evidence confirms
+the outage, the alert carries both the decision time and the original
+`suspected_at`, making detection latency visible instead of rewriting the
+outage as having begun when the fleet finally agreed.
+
 A first-ever `up` is not a recovery either. Announcing "recovered" for
 everything at startup is the other way a monitoring channel gets muted.
 

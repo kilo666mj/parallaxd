@@ -47,8 +47,30 @@ func (c *Coordinator) rollUp(ctx context.Context, changed string) {
 			At:        c.now(),
 			Members:   c.members(comp),
 		}
+		if kind == KindDown {
+			a.SuspectedAt = c.earliestSuspicion(comp.Checks)
+		}
 		c.emit(ctx, a)
 	}
+}
+
+func (c *Coordinator) earliestSuspicion(checks []string) time.Time {
+	var earliest time.Time
+	for _, name := range checks {
+		c.mu.Lock()
+		st := c.states[name]
+		c.mu.Unlock()
+		if st == nil {
+			continue
+		}
+		st.mu.Lock()
+		at := st.suspectedSince
+		st.mu.Unlock()
+		if !at.IsZero() && (earliest.IsZero() || at.Before(earliest)) {
+			earliest = at
+		}
+	}
+	return earliest
 }
 
 // checkStatuses reads the current decided status of the named checks. A check

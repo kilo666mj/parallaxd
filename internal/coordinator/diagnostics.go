@@ -15,6 +15,7 @@ type Diagnostics struct {
 	RejectedResults map[string]uint64       `json:"rejected_results"`
 	Notifications   NotificationDiagnostics `json:"notifications"`
 	Assignments     []AssignmentDiagnostic  `json:"assignments"`
+	Checks          []CheckDiagnostic       `json:"checks"`
 }
 
 type QueueDiagnostics struct {
@@ -35,6 +36,16 @@ type AssignmentDiagnostic struct {
 	PreferredOwner string `json:"preferred_owner,omitempty"`
 	EffectiveOwner string `json:"effective_owner,omitempty"`
 	Reason         string `json:"reason"`
+}
+
+type CheckDiagnostic struct {
+	Check                  string                 `json:"check"`
+	SuspectedSince         time.Time              `json:"suspected_since,omitempty"`
+	LastAttempt            time.Time              `json:"last_attempt,omitempty"`
+	LastCorroborationMS    int64                  `json:"last_corroboration_ms,omitempty"`
+	InconclusiveAttempts   uint64                 `json:"inconclusive_attempts,omitempty"`
+	LastInconclusiveReason string                 `json:"last_inconclusive_reason,omitempty"`
+	InconclusiveHistory    []CorroborationAttempt `json:"inconclusive_history,omitempty"`
 }
 
 func (c *Coordinator) recordRejectedResult(reason string) {
@@ -94,8 +105,24 @@ func (c *Coordinator) DiagnosticState() Diagnostics {
 		out.Assignments = append(out.Assignments, AssignmentDiagnostic{
 			Check: chk.Name, PreferredOwner: preferred, EffectiveOwner: effective, Reason: reason,
 		})
+		c.mu.Lock()
+		st := c.states[chk.Name]
+		c.mu.Unlock()
+		if st != nil {
+			st.mu.Lock()
+			if !st.lastAttempt.IsZero() {
+				out.Checks = append(out.Checks, CheckDiagnostic{
+					Check: chk.Name, SuspectedSince: st.suspectedSince,
+					LastAttempt: st.lastAttempt, LastCorroborationMS: st.lastCorroboration.Milliseconds(),
+					InconclusiveAttempts: st.inconclusiveAttempts, LastInconclusiveReason: st.lastInconclusive,
+					InconclusiveHistory: append([]CorroborationAttempt(nil), st.inconclusiveHistory...),
+				})
+			}
+			st.mu.Unlock()
+		}
 	}
 	sort.Slice(out.Assignments, func(i, j int) bool { return out.Assignments[i].Check < out.Assignments[j].Check })
+	sort.Slice(out.Checks, func(i, j int) bool { return out.Checks[i].Check < out.Checks[j].Check })
 	return out
 }
 
