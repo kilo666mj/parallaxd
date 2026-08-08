@@ -92,3 +92,54 @@ func TestLoadConfigRejectsUnknownAndTrailingFields(t *testing.T) {
 		t.Fatalf("trailing value error = %v", err)
 	}
 }
+
+func TestLoadConfigRejectsInvalidNotificationDestination(t *testing.T) {
+	path := validConfigFile(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["notification_destinations"] = []map[string]any{{"name": "pager", "webhook": "not-a-url"}}
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "absolute http") {
+		t.Fatalf("invalid destination error = %v", err)
+	}
+}
+
+func TestValidateConfigAcceptsNotificationRoutingAndEscalation(t *testing.T) {
+	path := validConfigFile(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["notification_destinations"] = []map[string]any{{"name": "pager", "webhook": "https://pager.example/events"}}
+	doc["notification_routes"] = []map[string]any{{"name": "public down", "destination": "pager", "checks": []string{"site"}, "kinds": []string{"down"}}}
+	doc["escalations"] = []map[string]any{{"name": "unacked", "destination": "pager", "after": "10m", "checks": []string{"site"}, "kinds": []string{"down"}}}
+	doc["notification_retry_initial"] = "10s"
+	doc["notification_retry_max"] = "5m"
+	doc["notification_retry_interval"] = "2s"
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfig(path, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("validateConfig: %v", err)
+	}
+}

@@ -284,6 +284,40 @@ product or monitoring system belongs outside this repository — parallaxd shoul
 be useful to someone running none of the same infrastructure, and the webhook is
 where their own glue attaches.
 
+Webhook delivery is durable. Each destination is attempted independently; a
+failure enters the persisted outbox and retries with capped exponential
+backoff. Later alerts for that destination queue behind it, preserving `DOWN`
+then `RECOVERED` order without holding up healthy destinations. The legacy
+`webhook` field remains supported as a destination named `webhook`.
+
+Additional destinations can be routed by check, component, prober, and alert
+kind. A destination with no routes receives everything; once any route names a
+destination, only matching alerts go there. The log is the always-on `default`
+destination and cannot be routed away:
+
+```json
+"notification_destinations": [
+  {"name":"chat", "webhook":"https://chat.example/hooks/alerts"},
+  {"name":"pager", "webhook":"https://pager.example/v1/events",
+   "headers":{"Authorization":"Bearer ..."}}
+],
+"notification_routes": [
+  {"name":"chat all", "destination":"chat"},
+  {"name":"page public sites", "destination":"pager",
+   "checks":["labbookdesigns-www","kilo666-www"], "kinds":["down"]}
+],
+"escalations": [
+  {"name":"unacknowledged public outage", "destination":"pager",
+   "after":"10m", "checks":["labbookdesigns-www","kilo666-www"],
+   "kinds":["down"]}
+]
+```
+
+An escalation is queued once when a matching incident is still active,
+unsuppressed, and unacknowledged after `after`. Acknowledging or resolving it
+before delivery cancels the queued escalation. `GET /v1/deliveries` exposes
+the durable outbox; diagnostics include pending age and per-destination errors.
+
 Alerts carry the whole verdict, because the strength of the agreement is part
 of the finding:
 
@@ -595,8 +629,9 @@ curl -X POST http://127.0.0.1:8972/v1/silences \
 
 `GET /v1/diagnostics` explains the current effective and preferred owner of
 every check, result-queue pressure, rejected-result counts by reason, and
-notification attempts, failures, and last error. These counters describe the
-current coordinator process; incidents and silences are the durable record.
+notification attempts, pending count, oldest queued delivery, and
+per-destination errors. Attempt counters describe the current process;
+incidents, silences, and the notification outbox are durable.
 
 ## Deploying
 
