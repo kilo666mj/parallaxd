@@ -18,7 +18,7 @@
 	"components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
 	"maintenance": {{ parallaxd_maintenance | to_nice_json(indent=2) | indent(2) }},
 	"state_file": "/var/lib/parallaxd/state.json",
-{% if parallaxd_operator_token | trim | length > 0 %}
+{% if parallaxd_operator_token | trim | length > 0 or inventory_hostname in parallaxd_standby_hosts %}
 	"operator_token_file": "{{ parallaxd_key_dir }}/operator-token",
 {% endif %}
 
