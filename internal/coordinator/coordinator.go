@@ -279,6 +279,7 @@ func New(cfg Config) (*Coordinator, error) {
 
 	ring := wire.NewKeyring()
 	byName := make(map[string]Peer, len(cfg.Peers))
+	byKey := make(map[string]string, len(cfg.Peers))
 	peers := make([]Peer, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
 		if _, dup := byName[p.Name]; dup {
@@ -287,10 +288,15 @@ func New(cfg Config) (*Coordinator, error) {
 			// which way the mistake ran.
 			return nil, fmt.Errorf("duplicate prober name %q", p.Name)
 		}
+		keyID := string(p.PublicKey)
+		if other, dup := byKey[keyID]; dup {
+			return nil, fmt.Errorf("probers %q and %q share a public key", other, p.Name)
+		}
 		if err := ring.Add(p.Name, p.PublicKey); err != nil {
 			return nil, err
 		}
 		byName[p.Name] = p
+		byKey[keyID] = p.Name
 		peers = append(peers, p)
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].Name < peers[j].Name })
@@ -313,6 +319,18 @@ func New(cfg Config) (*Coordinator, error) {
 			// alert.
 			return nil, fmt.Errorf("check %q asks %d probers but only %d are registered",
 				c.Name, c.Quorum.Of, len(peers))
+		}
+		if c.Quorum.DistinctProviders {
+			providers := make(map[string]bool)
+			for _, p := range peers {
+				if strings.TrimSpace(p.Provider) != "" {
+					providers[p.Provider] = true
+				}
+			}
+			if len(providers) < c.Quorum.Agree {
+				return nil, fmt.Errorf("check %q requires %d distinct providers but only %d are configured",
+					c.Name, c.Quorum.Agree, len(providers))
+			}
 		}
 		if c.Prober != "" {
 			if _, ok := byName[c.Prober]; !ok {

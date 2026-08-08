@@ -405,14 +405,52 @@
       no_log: true
       notify: Restart coordinator
 
-    - name: Deploy the coordinator configuration
+    - name: Preview coordinator configuration changes
       ansible.builtin.template:
         src: coordinator.json.j2
         dest: "{{ parallaxd_config_dir }}/coordinator.json"
         owner: root
         group: "{{ parallaxd_group }}"
         mode: "0640"
+      when: ansible_check_mode
       notify: Restart coordinator
+
+    - name: Validate and install the coordinator configuration
+      when: not ansible_check_mode
+      block:
+        - name: Render the coordinator configuration candidate
+          ansible.builtin.template:
+            src: coordinator.json.j2
+            dest: "{{ parallaxd_config_dir }}/coordinator.json.candidate"
+            owner: root
+            group: "{{ parallaxd_group }}"
+            mode: "0640"
+
+        - name: Validate the coordinator configuration candidate
+          ansible.builtin.command:
+            cmd: >-
+              /usr/local/bin/parallaxd
+              -config {{ parallaxd_config_dir }}/coordinator.json.candidate
+              -validate
+          changed_when: false
+
+        # copy uses a temporary file and rename on the remote host, so readers
+        # see either the old validated config or the complete new one, never a
+        # partially written document.
+        - name: Install the validated coordinator configuration atomically
+          ansible.builtin.copy:
+            src: "{{ parallaxd_config_dir }}/coordinator.json.candidate"
+            dest: "{{ parallaxd_config_dir }}/coordinator.json"
+            remote_src: true
+            owner: root
+            group: "{{ parallaxd_group }}"
+            mode: "0640"
+          notify: Restart coordinator
+      always:
+        - name: Remove the coordinator configuration candidate
+          ansible.builtin.file:
+            path: "{{ parallaxd_config_dir }}/coordinator.json.candidate"
+            state: absent
 
     - name: Deploy the coordinator unit
       ansible.builtin.template:

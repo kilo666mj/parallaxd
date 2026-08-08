@@ -10,7 +10,12 @@
     notification delivery diagnostics
   - dashboard controls for acknowledgement, manual resolution, silence
     creation/cancellation, and operational diagnostics
-- **Next:** notification retry policy, per-target routing, and escalation policy
+- **Completed configuration safety:** startup validation and deployment preflight
+  - strict JSON parsing and shared-key/provider-diversity checks
+  - timeout-budget and semantic coordinator validation
+  - staged Ansible validation before atomic config replacement
+- **Next:** suspect/inconclusive timelines, then durable notification delivery,
+  per-target routing, and escalation policy
 
 parallaxd is already a capable distributed monitoring system: it supports
 multiple protocols, dynamic probe assignment, failure corroboration, mesh-aware

@@ -728,7 +728,11 @@ func TestNewValidates(t *testing.T) {
 	// A hard-down target commonly consumes the entire probe timeout. The
 	// coordinator still needs enough time afterward to receive and verify the
 	// signed result; otherwise every real timeout becomes an absent vote.
-	peer2 := Peer{Name: "q", URL: "http://y", PublicKey: pub}
+	pub2, _, err := wire.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer2 := Peer{Name: "q", URL: "http://y", PublicKey: pub2}
 	slow := good
 	slow.Timeout = 15 * time.Second
 	slow.Quorum = check.Quorum{Agree: 2, Of: 2}
@@ -738,6 +742,26 @@ func TestNewValidates(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "leaves no response budget") {
 		t.Fatalf("short fan-out timeout error = %v, want response-budget error", err)
+	}
+
+	providerBound := good
+	providerBound.Quorum = check.Quorum{Agree: 2, Of: 2, DistinctProviders: true}
+	_, err = New(Config{
+		Name: "c", Key: priv,
+		Peers:  []Peer{{Name: "p", URL: "http://x", Provider: "same", PublicKey: pub}, {Name: "q", URL: "http://y", Provider: "same", PublicKey: pub2}},
+		Checks: []check.Check{providerBound},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires 2 distinct providers") {
+		t.Fatalf("provider diversity error = %v, want impossible-provider error", err)
+	}
+
+	_, err = New(Config{
+		Name: "c", Key: priv,
+		Peers:  []Peer{{Name: "p", URL: "http://x", PublicKey: pub}, {Name: "q", URL: "http://y", PublicKey: pub}},
+		Checks: []check.Check{providerBound},
+	})
+	if err == nil || !strings.Contains(err.Error(), "share a public key") {
+		t.Fatalf("shared-key error = %v, want duplicate-key error", err)
 	}
 }
 
