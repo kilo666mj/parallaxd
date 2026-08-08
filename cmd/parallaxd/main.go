@@ -63,6 +63,9 @@ type config struct {
 	NotificationRetryInitial  duration                        `json:"notification_retry_initial,omitempty"`
 	NotificationRetryMax      duration                        `json:"notification_retry_max,omitempty"`
 	NotificationRetryInterval duration                        `json:"notification_retry_interval,omitempty"`
+	HistoryFile               string                          `json:"history_file,omitempty"`
+	HistoryRetention          duration                        `json:"history_retention,omitempty"`
+	HistoryMaxPerCheck        int                             `json:"history_max_per_check,omitempty"`
 
 	// Heartbeat is the outward dead-man's switch. Without it nothing outside
 	// the fleet notices if this coordinator dies, and the resulting silence
@@ -344,8 +347,10 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 	}
 
 	stateFile := cfg.StateFile
+	historyFile := cfg.HistoryFile
 	if !restoreState {
 		stateFile = ""
+		historyFile = ""
 	}
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
@@ -360,6 +365,9 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		NotificationRetryInitial:  time.Duration(cfg.NotificationRetryInitial),
 		NotificationRetryMax:      time.Duration(cfg.NotificationRetryMax),
 		NotificationRetryInterval: time.Duration(cfg.NotificationRetryInterval),
+		HistoryFile:               historyFile,
+		HistoryRetention:          time.Duration(cfg.HistoryRetention),
+		HistoryMaxPerCheck:        cfg.HistoryMaxPerCheck,
 		Heartbeat: coordinator.Heartbeat{
 			URL:      cfg.Heartbeat.URL,
 			Interval: time.Duration(cfg.Heartbeat.Interval),

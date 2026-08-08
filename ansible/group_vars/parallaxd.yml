@@ -143,6 +143,12 @@ parallaxd_notification_retry_initial: 15s
 parallaxd_notification_retry_max: 15m
 parallaxd_notification_retry_interval: 5s
 
+# Append-only observation history. Retention and per-check limits bound both
+# query memory and the periodically compacted journal size.
+parallaxd_history_file: /var/lib/parallaxd/observations.jsonl
+parallaxd_history_retention: 720h
+parallaxd_history_max_per_check: 10000
+
 # Enables the authenticated operator API for acknowledging/resolving incidents
 # and creating/cancelling silences. Define parallaxd_operator_token_secret in a
 # gitignored or vaulted group_vars/all.yml. Empty keeps every mutation endpoint

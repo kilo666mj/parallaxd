@@ -318,6 +318,27 @@ unsuppressed, and unacknowledged after `after`. Acknowledging or resolving it
 before delivery cancels the queued escalation. `GET /v1/deliveries` exposes
 the durable outbox; diagnostics include pending age and per-destination errors.
 
+### Observation history
+
+The coordinator journals every accepted scheduled result and every on-demand
+corroboration as append-only JSONL. `history_retention` (default 30 days) and
+`history_max_per_check` (default 10,000) bound the query window and periodic
+atomic compaction. The Ansible deployment stores it at
+`/var/lib/parallaxd/observations.jsonl`.
+
+`GET /v1/history?check=svc&since=2026-08-01T00:00:00Z&limit=1000` returns raw
+observations with prober/provider, raw outcome, corroborated verdict, latency,
+detail, source, and whether the result was suppressed from decision-making.
+DNS answers and TLS peer/expiry are extracted into structured fields.
+`GET /v1/history/summary` reports the
+retained sample counts, availability, average and p95 latency, current DNS
+answers, and certificate days remaining; the dashboard renders the same view.
+
+Availability uses scheduled observations only. Corroboration is retained for
+incident analysis but excluded from that denominator, because failures fan out
+to several probers while healthy checks use one; counting every corroborator
+would systematically make outages look several times longer than they were.
+
 Alerts carry the whole verdict, because the strength of the agreement is part
 of the finding:
 
