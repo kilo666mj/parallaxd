@@ -23,6 +23,9 @@ type persistedState struct {
 	Outbox         []Delivery                 `json:"outbox,omitempty"`
 	NextDeliveryID uint64                     `json:"next_delivery_id,omitempty"`
 	Escalated      map[string]time.Time       `json:"escalated,omitempty"`
+	Promoted       bool                       `json:"promoted,omitempty"`
+	PromotedAt     time.Time                  `json:"promoted_at,omitempty"`
+	PromotedBy     string                     `json:"promoted_by,omitempty"`
 }
 type persistedEntity struct {
 	Status               check.Status           `json:"status"`
@@ -38,30 +41,33 @@ type persistedEntity struct {
 }
 
 func (c *Coordinator) persist() {
+	if err := c.persistState(); err != nil {
+		c.log.Error("persisting state", "err", err)
+	}
+}
+
+func (c *Coordinator) persistState() error {
 	if c.cfg.StateFile == "" {
-		return
+		return nil
 	}
 	c.persistMu.Lock()
 	defer c.persistMu.Unlock()
 	s := c.snapshot()
 	raw, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		c.log.Error("encoding state", "err", err)
-		return
+		return fmt.Errorf("encode state: %w", err)
 	}
 	dir := filepath.Dir(c.cfg.StateFile)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		c.log.Error("creating state directory", "err", err)
-		return
+		return fmt.Errorf("create state directory: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".parallaxd-state-*")
 	if err != nil {
-		c.log.Error("creating state file", "err", err)
-		return
+		return fmt.Errorf("create state file: %w", err)
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if err := tmp.Chmod(0600); err == nil {
+	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(raw)
 	}
 	if err == nil {
@@ -73,9 +79,22 @@ func (c *Coordinator) persist() {
 	if err == nil {
 		err = os.Rename(name, c.cfg.StateFile)
 	}
-	if err != nil {
-		c.log.Error("persisting state", "err", err)
+	if err == nil {
+		err = syncDirectory(dir)
 	}
+	return err
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func (c *Coordinator) snapshot() persistedState {
@@ -88,7 +107,7 @@ func (c *Coordinator) snapshot() persistedState {
 	for k, v := range c.componentStates {
 		components[k] = v
 	}
-	s := persistedState{Version: 3, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}}
+	s := persistedState{Version: 4, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy}
 	for k, v := range c.lastScheduled {
 		s.LastScheduled[k] = v
 	}
@@ -132,39 +151,56 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version != 1 && s.Version != 2 && s.Version != 3 {
+	if s.Version != 1 && s.Version != 2 && s.Version != 3 && s.Version != 4 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
+	return c.applyPersistedState(s, false)
+}
+
+func (c *Coordinator) applyPersistedState(s persistedState, replicated bool) error {
+	states := map[string]*entityState{}
 	for k, v := range s.Checks {
 		if _, ok := c.checks[k]; ok {
-			c.states[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict,
+			states[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict,
 				suspectedSince: v.SuspectedSince, lastAttempt: v.LastAttempt, lastCorroboration: v.LastCorroboration,
 				inconclusiveAttempts: v.InconclusiveAttempts, lastInconclusive: v.LastInconclusive}
-			c.states[k].inconclusiveHistory = append([]CorroborationAttempt(nil), v.InconclusiveHistory...)
+			states[k].inconclusiveHistory = append([]CorroborationAttempt(nil), v.InconclusiveHistory...)
 		}
 	}
+	componentStates := map[string]*entityState{}
 	for k, v := range s.Components {
-		c.componentStates[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict}
+		componentStates[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict}
 	}
+	lastScheduled := map[string]time.Time{}
 	for k, v := range s.LastScheduled {
-		c.lastScheduled[k] = v
+		lastScheduled[k] = v
 	}
+	silent := map[string]bool{}
 	for k, v := range s.Silent {
-		c.silent[k] = v
+		silent[k] = v
 	}
-	c.incidents = s.Incidents
-	c.nextIncidentID = s.NextIncidentID
-	c.silences = s.Silences
-	c.nextSilenceID = s.NextSilenceID
-	c.outbox = append([]Delivery(nil), s.Outbox...)
-	c.nextDeliveryID = s.NextDeliveryID
-	for _, delivery := range c.outbox {
+	outbox := append([]Delivery(nil), s.Outbox...)
+	for _, delivery := range outbox {
 		if c.destinations[delivery.Destination] == nil {
 			return fmt.Errorf("pending delivery %d names unavailable notification destination %q", delivery.ID, delivery.Destination)
 		}
 	}
+	escalated := map[string]time.Time{}
 	for k, v := range s.Escalated {
-		c.escalated[k] = v
+		escalated[k] = v
+	}
+	c.mu.Lock()
+	c.states, c.componentStates = states, componentStates
+	c.lastScheduled, c.silent = lastScheduled, silent
+	c.incidents, c.nextIncidentID = append([]Incident(nil), s.Incidents...), s.NextIncidentID
+	c.silences, c.nextSilenceID = append([]Silence(nil), s.Silences...), s.NextSilenceID
+	c.outbox, c.nextDeliveryID, c.escalated = outbox, s.NextDeliveryID, escalated
+	c.mu.Unlock()
+	if !replicated && s.Promoted {
+		c.promoted.Store(true)
+		c.mu.Lock()
+		c.promotedAt, c.promotedBy = s.PromotedAt, s.PromotedBy
+		c.mu.Unlock()
 	}
 	return nil
 }
