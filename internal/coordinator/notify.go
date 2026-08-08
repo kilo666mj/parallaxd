@@ -98,6 +98,7 @@ type Alert struct {
 	// SuspectedAt is the first failed observation in the chain that eventually
 	// reached quorum. At remains the decision time.
 	SuspectedAt time.Time `json:"suspected_at,omitempty"`
+	Escalation  string    `json:"escalation,omitempty"`
 
 	// Verdict is the corroboration detail, and is only meaningful on a check
 	// alert: a component has no probers of its own to agree or dissent.
@@ -155,6 +156,7 @@ func (a Alert) Summary() string {
 		if a.Detail != "" {
 			fmt.Fprintf(&b, " — %s", a.Detail)
 		}
+		a.appendEscalation(&b)
 		return b.String()
 	}
 
@@ -170,6 +172,7 @@ func (a Alert) Summary() string {
 			}
 			fmt.Fprintf(&b, ": %s", strings.Join(names, ", "))
 		}
+		a.appendEscalation(&b)
 		return b.String()
 	}
 
@@ -194,6 +197,7 @@ func (a Alert) Summary() string {
 				fmt.Fprintf(&b, "; first suspected %s earlier", latency)
 			}
 		}
+		a.appendEscalation(&b)
 		return b.String()
 	}
 
@@ -210,7 +214,14 @@ func (a Alert) Summary() string {
 			fmt.Fprintf(&b, "; first suspected %s earlier", latency)
 		}
 	}
+	a.appendEscalation(&b)
 	return b.String()
+}
+
+func (a Alert) appendEscalation(b *strings.Builder) {
+	if a.Escalation != "" {
+		fmt.Fprintf(b, "; ESCALATION %s", a.Escalation)
+	}
 }
 
 // Notifier delivers an alert.

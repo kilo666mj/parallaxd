@@ -109,6 +109,16 @@ type Config struct {
 	// Notifier receives alerts. Nil means log only.
 	Notifier Notifier
 
+	// Destinations are independently delivered and retried. Notifier remains
+	// the always-on default destination for backwards compatibility.
+	Destinations []NotificationDestination
+	Routes       []NotificationRoute
+	Escalations  []EscalationPolicy
+
+	NotificationRetryInitial  time.Duration
+	NotificationRetryMax      time.Duration
+	NotificationRetryInterval time.Duration
+
 	// Heartbeat is the outward dead-man's switch: something off the fleet that
 	// alerts when this coordinator stops pinging it. Without one, a
 	// coordinator that dies takes the alerting with it and the silence is
@@ -186,6 +196,10 @@ type Coordinator struct {
 	silences        []Silence
 	nextSilenceID   uint64
 	diagnostics     Diagnostics
+	destinations    map[string]Notifier
+	outbox          []Delivery
+	nextDeliveryID  uint64
+	escalated       map[string]time.Time
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -198,8 +212,9 @@ type Coordinator struct {
 
 	// inflight tracks background processing so shutdown can wait for a
 	// verdict to finish rather than abandoning it half-delivered.
-	inflight  sync.WaitGroup
-	persistMu sync.Mutex
+	inflight   sync.WaitGroup
+	persistMu  sync.Mutex
+	deliveryMu sync.Mutex
 }
 
 // entityState is what the coordinator remembers about one thing it reports on
@@ -299,6 +314,9 @@ func New(cfg Config) (*Coordinator, error) {
 	}
 	if cfg.Notifier == nil {
 		cfg.Notifier = LogNotifier{Logger: cfg.Logger}
+	}
+	if err := validateNotificationConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	ring := wire.NewKeyring()
@@ -405,6 +423,11 @@ func New(cfg Config) (*Coordinator, error) {
 		diagnostics: Diagnostics{
 			RejectedResults: map[string]uint64{},
 		},
+		destinations: map[string]Notifier{"default": cfg.Notifier},
+		escalated:    map[string]time.Time{},
+	}
+	for _, destination := range cfg.Destinations {
+		coord.destinations[destination.Name] = destination.Notifier
 	}
 	if err := coord.restore(); err != nil {
 		return nil, err
@@ -801,6 +824,7 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/silences", c.handleCreateSilence)
 	mux.HandleFunc("DELETE /v1/silences/{id}", c.handleDeleteSilence)
 	mux.HandleFunc("GET /v1/diagnostics", c.handleDiagnostics)
+	mux.HandleFunc("GET /v1/deliveries", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) })
 	mux.HandleFunc("GET /", c.handleDashboard)
 	return mux
 }

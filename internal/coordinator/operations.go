@@ -81,6 +81,8 @@ func (c *Coordinator) activeMaintenance(a Alert, now time.Time) string {
 }
 
 func (c *Coordinator) recordIncident(a Alert, maintenance string, silenceID uint64, silence string) {
+	c.deliveryMu.Lock()
+	defer c.deliveryMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	subject := a.Subject()
@@ -90,6 +92,7 @@ func (c *Coordinator) recordIncident(a Alert, maintenance string, silenceID uint
 			if c.incidents[i].Subject == subject && c.incidents[i].Active {
 				c.incidents[i].Active = false
 				c.incidents[i].ResolvedAt = a.At
+				c.cancelEscalationsLocked(c.incidents[i].ID)
 				return
 			}
 		}

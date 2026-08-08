@@ -24,6 +24,17 @@ type QueueDiagnostics struct {
 }
 
 type NotificationDiagnostics struct {
+	Attempts      uint64                            `json:"attempts"`
+	Failures      uint64                            `json:"failures"`
+	Pending       int                               `json:"pending"`
+	OldestPending time.Time                         `json:"oldest_pending,omitempty"`
+	LastAttempt   time.Time                         `json:"last_attempt,omitempty"`
+	LastSuccess   time.Time                         `json:"last_success,omitempty"`
+	LastError     string                            `json:"last_error,omitempty"`
+	Destinations  map[string]DestinationDiagnostics `json:"destinations,omitempty"`
+}
+
+type DestinationDiagnostics struct {
 	Attempts    uint64    `json:"attempts"`
 	Failures    uint64    `json:"failures"`
 	LastAttempt time.Time `json:"last_attempt,omitempty"`
@@ -54,21 +65,38 @@ func (c *Coordinator) recordRejectedResult(reason string) {
 	c.mu.Unlock()
 }
 
-func (c *Coordinator) deliver(ctx context.Context, a Alert) error {
+func (c *Coordinator) recordDeliveryAttempt(ctx context.Context, destination string, notifier Notifier, a Alert) error {
 	now := c.now().UTC()
 	c.mu.Lock()
 	c.diagnostics.Notifications.Attempts++
 	c.diagnostics.Notifications.LastAttempt = now
+	if c.diagnostics.Notifications.Destinations == nil {
+		c.diagnostics.Notifications.Destinations = map[string]DestinationDiagnostics{}
+	}
+	diagnostic := c.diagnostics.Notifications.Destinations[destination]
+	diagnostic.Attempts++
+	diagnostic.LastAttempt = now
+	c.diagnostics.Notifications.Destinations[destination] = diagnostic
 	c.mu.Unlock()
 
-	err := c.cfg.Notifier.Notify(ctx, a)
+	err := notifier.Notify(ctx, a)
 	c.mu.Lock()
 	if err != nil {
 		c.diagnostics.Notifications.Failures++
-		c.diagnostics.Notifications.LastError = err.Error()
+		diagnostic.Failures++
+		diagnostic.LastError = err.Error()
 	} else {
 		c.diagnostics.Notifications.LastSuccess = now
-		c.diagnostics.Notifications.LastError = ""
+		diagnostic.LastSuccess = now
+		diagnostic.LastError = ""
+	}
+	c.diagnostics.Notifications.Destinations[destination] = diagnostic
+	c.diagnostics.Notifications.LastError = ""
+	for _, state := range c.diagnostics.Notifications.Destinations {
+		if state.LastError != "" {
+			c.diagnostics.Notifications.LastError = state.LastError
+			break
+		}
 	}
 	c.mu.Unlock()
 	return err
@@ -77,6 +105,10 @@ func (c *Coordinator) deliver(ctx context.Context, a Alert) error {
 func (c *Coordinator) DiagnosticState() Diagnostics {
 	c.mu.Lock()
 	out := c.diagnostics
+	out.Notifications.Destinations = make(map[string]DestinationDiagnostics, len(c.diagnostics.Notifications.Destinations))
+	for destination, diagnostic := range c.diagnostics.Notifications.Destinations {
+		out.Notifications.Destinations[destination] = diagnostic
+	}
 	out.RejectedResults = make(map[string]uint64, len(c.diagnostics.RejectedResults))
 	for reason, count := range c.diagnostics.RejectedResults {
 		out.RejectedResults[reason] = count
@@ -85,6 +117,14 @@ func (c *Coordinator) DiagnosticState() Diagnostics {
 
 	out.GeneratedAt = c.now().UTC()
 	out.ResultQueue = QueueDiagnostics{Depth: len(c.resultSlots), Capacity: cap(c.resultSlots)}
+	c.mu.Lock()
+	out.Notifications.Pending = len(c.outbox)
+	for _, delivery := range c.outbox {
+		if out.Notifications.OldestPending.IsZero() || delivery.CreatedAt.Before(out.Notifications.OldestPending) {
+			out.Notifications.OldestPending = delivery.CreatedAt
+		}
+	}
+	c.mu.Unlock()
 	unavailable := c.unavailableProbers()
 	for _, chk := range c.checks {
 		preferred, _ := c.baseAssignedTo(chk)

@@ -134,6 +134,8 @@ func (c *Coordinator) AcknowledgeIncident(id uint64, actor, note string) error {
 		return errors.New("actor is required")
 	}
 	now := c.now().UTC()
+	c.deliveryMu.Lock()
+	defer c.deliveryMu.Unlock()
 	c.mu.Lock()
 	for i := range c.incidents {
 		incident := &c.incidents[i]
@@ -147,6 +149,7 @@ func (c *Coordinator) AcknowledgeIncident(id uint64, actor, note string) error {
 		incident.AcknowledgedAt = &now
 		incident.AcknowledgedBy = actor
 		incident.Acknowledgement = strings.TrimSpace(note)
+		c.cancelEscalationsLocked(incident.ID)
 		c.mu.Unlock()
 		c.persist()
 		return nil
@@ -161,6 +164,8 @@ func (c *Coordinator) ResolveIncident(id uint64, actor, note string) error {
 		return errors.New("actor is required")
 	}
 	now := c.now().UTC()
+	c.deliveryMu.Lock()
+	defer c.deliveryMu.Unlock()
 	c.mu.Lock()
 	for i := range c.incidents {
 		incident := &c.incidents[i]
@@ -176,6 +181,7 @@ func (c *Coordinator) ResolveIncident(id uint64, actor, note string) error {
 		incident.ResolvedBy = actor
 		incident.Resolution = strings.TrimSpace(note)
 		incident.ManualResolution = true
+		c.cancelEscalationsLocked(incident.ID)
 		c.mu.Unlock()
 		c.persist()
 		return nil

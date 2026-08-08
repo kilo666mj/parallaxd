@@ -60,9 +60,11 @@ type Heartbeat struct {
 // separate from Handler so a coordinator can be driven directly in tests
 // without background goroutines deciding things underneath the test.
 func (c *Coordinator) Run(ctx context.Context) {
-	done := make(chan struct{}, 2)
+	done := make(chan struct{}, 3)
 	go func() { c.watchStaleness(ctx); done <- struct{}{} }()
 	go func() { c.runHeartbeat(ctx); done <- struct{}{} }()
+	go func() { c.runDeliveries(ctx); done <- struct{}{} }()
+	<-done
 	<-done
 	<-done
 }
