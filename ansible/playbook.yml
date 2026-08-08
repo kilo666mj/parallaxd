@@ -516,6 +516,25 @@
       no_log: true
       notify: Restart coordinator
 
+    - name: Read the primary operator token for the standby
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/operator-token"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_primary_operator_token_raw
+      when: inventory_hostname in parallaxd_standby_hosts
+      no_log: true
+
+    - name: Deploy the operator token to the standby
+      ansible.builtin.copy:
+        content: "{{ parallaxd_primary_operator_token_raw.content | b64decode | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/operator-token"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: inventory_hostname in parallaxd_standby_hosts
+      no_log: true
+      notify: Restart coordinator
+
     - name: Warn when nothing is watching this coordinator
       ansible.builtin.debug:
         msg: >-
