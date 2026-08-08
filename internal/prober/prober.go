@@ -79,11 +79,13 @@ type Config struct {
 
 // Prober runs checks and signs the results.
 type Prober struct {
-	cfg     Config
-	kinds   map[check.Kind]probe.Prober
-	slots   chan struct{}
-	log     *slog.Logger
-	nowFunc func() time.Time
+	cfg          Config
+	kinds        map[check.Kind]probe.Prober
+	slots        chan struct{}
+	log          *slog.Logger
+	nowFunc      func() time.Time
+	requestMu    sync.Mutex
+	seenRequests map[string]time.Time
 }
 
 // New builds a prober.
@@ -115,10 +117,15 @@ func New(cfg Config) (*Prober, error) {
 			check.KindTCP:    probe.TCP{Policy: cfg.Policy},
 			check.KindHTTP:   probe.HTTP{Policy: cfg.Policy},
 			check.KindBanner: probe.Banner{Policy: cfg.Policy},
+			check.KindDNS:    probe.DNS{Policy: cfg.Policy},
+			check.KindTLS:    probe.TLS{Policy: cfg.Policy},
+			check.KindSMTP:   probe.SMTP{Policy: cfg.Policy},
+			check.KindICMP:   probe.ICMP{Policy: cfg.Policy},
 		},
-		slots:   make(chan struct{}, cfg.MaxConcurrent),
-		log:     cfg.Logger.With("prober", cfg.Name),
-		nowFunc: now,
+		slots:        make(chan struct{}, cfg.MaxConcurrent),
+		log:          cfg.Logger.With("prober", cfg.Name),
+		nowFunc:      now,
+		seenRequests: map[string]time.Time{},
 	}, nil
 }
 
@@ -191,6 +198,17 @@ func (p *Prober) handleProbe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request rejected", http.StatusForbidden)
 		return
 	}
+	if req.Prober != p.cfg.Name {
+		p.log.Warn("refused a probe request intended for another prober",
+			"intended", req.Prober)
+		http.Error(w, "request is for another prober", http.StatusForbidden)
+		return
+	}
+	if !p.acceptRequest(req.ID, req.ExpiresAt) {
+		p.log.Warn("refused a replayed probe request", "request_id", req.ID)
+		http.Error(w, "request already used", http.StatusConflict)
+		return
+	}
 
 	out, err := p.Run(r.Context(), req.Check, req.ID)
 	if err != nil {
@@ -203,6 +221,22 @@ func (p *Prober) handleProbe(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		p.log.Error("writing result", "err", err)
 	}
+}
+
+func (p *Prober) acceptRequest(id string, expires time.Time) bool {
+	p.requestMu.Lock()
+	defer p.requestMu.Unlock()
+	now := p.nowFunc()
+	for seen, until := range p.seenRequests {
+		if now.After(until) {
+			delete(p.seenRequests, seen)
+		}
+	}
+	if _, exists := p.seenRequests[id]; exists {
+		return false
+	}
+	p.seenRequests[id] = expires
+	return true
 }
 
 // Schedule runs the assigned checks on their own intervals until ctx is

@@ -43,8 +43,14 @@ const (
 	// already allocated; this stops an unauthenticated sender getting there.
 	maxRequestBytes = 128 << 10
 
-	defaultFanOutTimeout = 10 * time.Second
+	defaultFanOutTimeout = 20 * time.Second
 	defaultRequestTTL    = 30 * time.Second
+
+	// A corroborator needs time to finish the probe and return its signed
+	// result. Giving the outer request the same deadline as the probe races the
+	// result against cancellation; giving it less time guarantees that a
+	// target which consumes its whole timeout can never contribute a vote.
+	minimumFanOutOverhead = time.Second
 
 	// defaultResultMaxAge is how old a result may be and still count. It has
 	// to cover the whole fan-out plus clock skew between probers, and stay
@@ -56,7 +62,8 @@ const (
 	// fleet-wide incident every check fails at once and each one wants to ask
 	// everybody; without a ceiling the coordinator answers an outage by
 	// opening a few thousand connections.
-	defaultMaxFanOuts = 16
+	defaultMaxFanOuts        = 16
+	defaultMaxPendingResults = 128
 )
 
 // Peer is a prober the coordinator knows about.
@@ -90,7 +97,14 @@ type Config struct {
 	// Components group checks into the services a person recognises. A check
 	// that belongs to one alerts through it rather than on its own, which is
 	// the difference between four alerts and one that says "email is down".
-	Components []check.Component
+	Components  []check.Component
+	Maintenance []Maintenance
+	StateFile   string
+
+	// OperatorToken enables authenticated incident and silence mutations.
+	// Read-only status endpoints remain available without it. An empty token
+	// disables every write endpoint rather than exposing control by accident.
+	OperatorToken string
 
 	// Notifier receives alerts. Nil means log only.
 	Notifier Notifier
@@ -118,10 +132,11 @@ type Config struct {
 	// of them counts as isolation. Zero applies the mesh package's default.
 	MeshMinPeers int
 
-	FanOutTimeout time.Duration
-	RequestTTL    time.Duration
-	ResultMaxAge  time.Duration
-	MaxFanOuts    int
+	FanOutTimeout     time.Duration
+	RequestTTL        time.Duration
+	ResultMaxAge      time.Duration
+	MaxFanOuts        int
+	MaxPendingResults int
 
 	HTTPClient *http.Client
 	Logger     *slog.Logger
@@ -152,6 +167,11 @@ type Coordinator struct {
 	// slots bounds concurrent fan-outs.
 	slots chan struct{}
 
+	// resultSlots bounds authenticated results waiting to be processed. Fan-out
+	// slots only cap active network work; without this second bound a registered
+	// peer can create an unlimited number of goroutines queued on check locks.
+	resultSlots chan struct{}
+
 	// startedAt is the baseline for staleness on a check that has never
 	// reported. Without it every check is stale the instant the process
 	// starts, which is how a useful signal becomes one people mute.
@@ -160,6 +180,12 @@ type Coordinator struct {
 	mu              sync.Mutex
 	states          map[string]*entityState
 	componentStates map[string]*entityState
+	lastScheduled   map[string]time.Time
+	incidents       []Incident
+	nextIncidentID  uint64
+	silences        []Silence
+	nextSilenceID   uint64
+	diagnostics     Diagnostics
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -172,7 +198,8 @@ type Coordinator struct {
 
 	// inflight tracks background processing so shutdown can wait for a
 	// verdict to finish rather than abandoning it half-delivered.
-	inflight sync.WaitGroup
+	inflight  sync.WaitGroup
+	persistMu sync.Mutex
 }
 
 // entityState is what the coordinator remembers about one thing it reports on
@@ -234,6 +261,9 @@ func New(cfg Config) (*Coordinator, error) {
 	if cfg.MaxFanOuts <= 0 {
 		cfg.MaxFanOuts = defaultMaxFanOuts
 	}
+	if cfg.MaxPendingResults <= 0 {
+		cfg.MaxPendingResults = defaultMaxPendingResults
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -270,6 +300,10 @@ func New(cfg Config) (*Coordinator, error) {
 		if err := c.Validate(); err != nil {
 			return nil, err
 		}
+		if c.Quorum.Agree > 1 && cfg.FanOutTimeout < c.Timeout+minimumFanOutOverhead {
+			return nil, fmt.Errorf("check %q timeout %s leaves no response budget inside fan-out timeout %s; need at least %s",
+				c.Name, c.Timeout, cfg.FanOutTimeout, c.Timeout+minimumFanOutOverhead)
+		}
 		if _, dup := checks[c.Name]; dup {
 			return nil, fmt.Errorf("duplicate check name %q", c.Name)
 		}
@@ -279,6 +313,11 @@ func New(cfg Config) (*Coordinator, error) {
 			// alert.
 			return nil, fmt.Errorf("check %q asks %d probers but only %d are registered",
 				c.Name, c.Quorum.Of, len(peers))
+		}
+		if c.Prober != "" {
+			if _, ok := byName[c.Prober]; !ok {
+				return nil, fmt.Errorf("check %q names unregistered prober %q", c.Name, c.Prober)
+			}
 		}
 		checks[c.Name] = c
 	}
@@ -301,20 +340,34 @@ func New(cfg Config) (*Coordinator, error) {
 			componentsFor[name] = append(componentsFor[name], comp)
 		}
 	}
+	for _, m := range cfg.Maintenance {
+		if err := m.Validate(); err != nil {
+			return nil, err
+		}
+	}
 
-	return &Coordinator{
+	coord := &Coordinator{
 		cfg: cfg, peers: peers, byName: byName, checks: checks, ring: ring,
 		componentsFor:   componentsFor,
 		log:             cfg.Logger,
 		client:          cfg.HTTPClient,
 		now:             cfg.Now,
 		slots:           make(chan struct{}, cfg.MaxFanOuts),
+		resultSlots:     make(chan struct{}, cfg.MaxPendingResults),
 		startedAt:       cfg.Now(),
 		meshState:       newMeshState(),
 		states:          map[string]*entityState{},
 		componentStates: map[string]*entityState{},
+		lastScheduled:   map[string]time.Time{},
 		silent:          map[string]bool{},
-	}, nil
+		diagnostics: Diagnostics{
+			RejectedResults: map[string]uint64{},
+		},
+	}
+	if err := coord.restore(); err != nil {
+		return nil, err
+	}
+	return coord, nil
 }
 
 // Process handles one authenticated result: corroborates if needed, decides,
@@ -326,6 +379,16 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	if !ok {
 		return quorum.Verdict{}, fmt.Errorf("unknown check %q", r.Check)
 	}
+	peer, ok := c.byName[r.Prober]
+	if !ok {
+		return quorum.Verdict{}, fmt.Errorf("unknown prober %q", r.Prober)
+	}
+	// Provider diversity is coordinator policy, not a claim a prober gets to
+	// make about itself. Always replace the signed value with the registered one.
+	r.Provider = peer.Provider
+	if c.markReporting(r.Prober) {
+		c.emit(ctx, Alert{Prober: r.Prober, Kind: KindReporting, At: c.now(), Detail: "reporting again; preferred assignments restored"})
+	}
 
 	// An isolated prober's result is not evidence, so it is not a trigger
 	// either. Fanning out on it would spend the corroboration budget on
@@ -333,11 +396,8 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	// cut-off prober sees every target as down, that is the entire budget,
 	// starving the triggers that do mean something.
 	//
-	// The cost is that a check whose assigned prober is isolated stops being
-	// evaluated until it rejoins. That is a real gap, and it is why isolation
-	// alerts rather than silently suppressing: the operator is told the
-	// prober's checks are no longer being run. Reassigning them to a healthy
-	// prober needs pushed assignments, which is future work.
+	// Dynamic assignment moves an isolated owner's scheduled checks to a healthy
+	// peer. Results already in flight from the isolated peer remain non-evidence.
 	if c.isolatedProbers()[r.Prober] {
 		c.log.Debug("ignoring a result from an isolated prober",
 			"check", chk.Name, "prober", r.Prober)
@@ -355,12 +415,7 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	// per port. A check in no component is still its own alert.
 	if alert && len(c.componentsFor[chk.Name]) == 0 {
 		a := Alert{Check: chk.Name, Target: chk.Target, Kind: kind, At: c.now(), Verdict: v}
-		if err := c.cfg.Notifier.Notify(ctx, a); err != nil {
-			// The state has already moved. Re-alerting on the next result would
-			// mean a flaky webhook produces a stream of duplicates for one
-			// outage, which is the noise this whole design is trying to remove.
-			c.log.Error("could not deliver alert", "check", chk.Name, "kind", string(kind), "err", err)
-		}
+		c.emit(ctx, a)
 	}
 
 	// Deliberately outside the check's lock, and unconditional. A rollup reads
@@ -369,6 +424,7 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	// even when nothing alerted, because a check moving from undecided to up is
 	// not an alert but does change what its component can conclude.
 	c.rollUp(ctx, chk.Name)
+	c.persist()
 	return v, nil
 }
 
@@ -391,9 +447,19 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 	// would change nothing.
 	if r.Status == check.StatusDown && !c.evaluate(chk, results).Actionable() {
 		results = append(results, c.corroborate(ctx, chk, r)...)
+	} else if r.Status == check.StatusUp && st.status == check.StatusDown && chk.Quorum.Agree > 1 {
+		// A recovery is a decision too. Requiring corroboration here prevents one
+		// compromised assigned prober from clearing an incident by itself, while
+		// keeping the steady-state cost at one probe when the check is healthy.
+		results = append(results, c.corroborate(ctx, chk, r)...)
 	}
 
 	v := c.evaluate(chk, results)
+	if st.status == check.StatusDown && v.Status == check.StatusUp && !recoveryConfirmed(chk, v) {
+		v.Status = check.StatusUnknown
+		v.Reason = fmt.Sprintf("recovery unconfirmed: %d of %d reported up, quorum needs %d",
+			v.Up, v.Counted, chk.Quorum.Agree)
+	}
 	st.lastVerdict = c.now()
 	// It just reported, so whatever the watchdog last concluded about its
 	// silence is out of date. Cleared here rather than waiting for the next
@@ -405,6 +471,13 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 		c.log.Debug("verdict", "check", chk.Name, "status", string(v.Status), "reason", v.Reason)
 	}
 	return v, alert, kind
+}
+
+func recoveryConfirmed(chk check.Check, v quorum.Verdict) bool {
+	if v.Up < chk.Quorum.Agree {
+		return false
+	}
+	return !chk.Quorum.DistinctProviders || len(v.Providers) >= chk.Quorum.Agree
 }
 
 func (c *Coordinator) evaluate(chk check.Check, results []check.Result) quorum.Verdict {
@@ -570,7 +643,7 @@ func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (check.R
 	}
 	now := c.now()
 	env, err := wire.SignRequest(c.cfg.Key, c.cfg.Name, wire.Request{
-		ID: id, Check: chk, IssuedAt: now, ExpiresAt: now.Add(c.cfg.RequestTTL),
+		ID: id, Prober: p.Name, Check: chk, IssuedAt: now, ExpiresAt: now.Add(c.cfg.RequestTTL),
 	})
 	if err != nil {
 		return check.Result{}, err
@@ -622,6 +695,9 @@ func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (check.R
 		return check.Result{}, fmt.Errorf("asked about %q, answered about %q",
 			chk.Name, payload.Result.Check)
 	}
+	// The coordinator owns provider topology. A prober may be misconfigured or
+	// compromised, but neither may redefine the independence of its vote.
+	payload.Result.Provider = p.Provider
 	return payload.Result, nil
 }
 
@@ -637,18 +713,30 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/components", c.handleComponents)
 	mux.HandleFunc("GET /v1/export", c.handleExport)
 	mux.HandleFunc("GET /v1/assignments", c.handleAssignments)
+	mux.HandleFunc("GET /v1/checks", c.handleChecks)
+	mux.HandleFunc("GET /v1/incidents", c.handleIncidents)
+	mux.HandleFunc("POST /v1/incidents/{id}/acknowledge", c.handleAcknowledgeIncident)
+	mux.HandleFunc("POST /v1/incidents/{id}/resolve", c.handleResolveIncident)
+	mux.HandleFunc("GET /v1/maintenance", c.handleMaintenance)
+	mux.HandleFunc("GET /v1/silences", c.handleSilences)
+	mux.HandleFunc("POST /v1/silences", c.handleCreateSilence)
+	mux.HandleFunc("DELETE /v1/silences/{id}", c.handleDeleteSilence)
+	mux.HandleFunc("GET /v1/diagnostics", c.handleDiagnostics)
+	mux.HandleFunc("GET /", c.handleDashboard)
 	return mux
 }
 
 func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 	var env wire.Envelope
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&env); err != nil {
+		c.recordRejectedResult("malformed_envelope")
 		http.Error(w, "malformed envelope", http.StatusBadRequest)
 		return
 	}
 
 	payload, err := c.ring.OpenResult(env, c.now())
 	if err != nil {
+		c.recordRejectedResult("authentication")
 		// A result counts toward a verdict, so an unauthenticated one could
 		// manufacture agreement or forge an all-clear. Refused before it is
 		// looked at.
@@ -657,6 +745,7 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, known := c.checks[payload.Result.Check]; !known {
+		c.recordRejectedResult("unknown_check")
 		// A registered prober reporting a check the coordinator does not have
 		// is a configuration drift, not an attack — but acting on it would
 		// mean alerting about something nobody defined.
@@ -665,20 +754,68 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown check", http.StatusBadRequest)
 		return
 	}
+	if payload.RequestID != "" {
+		c.recordRejectedResult("request_bound_result")
+		http.Error(w, "request-bound result is not a scheduled result", http.StatusBadRequest)
+		return
+	}
+	chk := c.checks[payload.Result.Check]
+	assigned, ok := c.assignedTo(chk)
+	preferred, _ := c.baseAssignedTo(chk)
+	returning := preferred == payload.Result.Prober && c.isSilent(payload.Result.Prober)
+	if (!ok || assigned != payload.Result.Prober) && !returning {
+		c.recordRejectedResult("not_assigned")
+		c.log.Warn("result from a prober not assigned to the check",
+			"check", chk.Name, "prober", payload.Result.Prober, "assigned", assigned)
+		http.Error(w, "prober is not assigned to this check", http.StatusForbidden)
+		return
+	}
+	payload.Result.Provider = c.byName[payload.Result.Prober].Provider
+
+	select {
+	case c.resultSlots <- struct{}{}:
+	case <-r.Context().Done():
+		return
+	default:
+		c.recordRejectedResult("queue_full")
+		http.Error(w, "result queue is full", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Scheduled results must move forward. This rejects retries, replays and
+	// delayed packets that would otherwise let an old all-clear undo a newer
+	// outage decision.
+	key := payload.Result.Prober + "\x00" + payload.Result.Check
+	c.mu.Lock()
+	last := c.lastScheduled[key]
+	if !payload.Result.At.After(last) {
+		c.mu.Unlock()
+		<-c.resultSlots
+		c.recordRejectedResult("replay_or_out_of_order")
+		http.Error(w, "result is not newer than the last accepted result", http.StatusConflict)
+		return
+	}
+	c.lastScheduled[key] = payload.Result.At
+	c.mu.Unlock()
+	reporting := returning && c.markReporting(payload.Result.Prober)
 
 	// Accepted, then processed in the background. Corroboration takes seconds
 	// and the prober submitting this is single-threaded per check: holding it
 	// open would delay that check's next probe by the length of the fan-out.
 	c.inflight.Add(1)
-	go func(res check.Result) {
+	go func(res check.Result, reporting bool) {
 		defer c.inflight.Done()
+		defer func() { <-c.resultSlots }()
 		ctx, cancel := context.WithTimeout(
 			context.WithoutCancel(r.Context()), c.cfg.FanOutTimeout*2)
 		defer cancel()
+		if reporting {
+			c.emit(ctx, Alert{Prober: res.Prober, Kind: KindReporting, At: c.now(), Detail: "reporting again; preferred assignments restored"})
+		}
 		if _, err := c.Process(ctx, res); err != nil {
 			c.log.Error("processing result", "check", res.Check, "err", err)
 		}
-	}(payload.Result)
+	}(payload.Result, reporting)
 
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -757,6 +894,15 @@ func (c *Coordinator) handleAssignments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, all)
+}
+
+func (c *Coordinator) handleChecks(w http.ResponseWriter, r *http.Request) {
+	prober, ok := c.proberCaller(r)
+	if !ok {
+		http.Error(w, "not a registered prober", http.StatusForbidden)
+		return
+	}
+	writeJSON(w, c.checksFor(prober))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

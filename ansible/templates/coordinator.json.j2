@@ -9,13 +9,18 @@
       "name": "{{ host }}",
       "url": "http://{{ hostvars[host]['parallaxd_address'] }}:{{ parallaxd_prober_port }}",
       "provider": "{{ hostvars[host]['parallaxd_provider'] }}",
-      "public_key": "{{ hostvars[host]['parallaxd_public_key'] }}"
+      "public_key": "{{ (parallaxd_coordinator_prober_keys.results | selectattr('item', 'equalto', host) | map(attribute='content') | first | b64decode | trim) }}"
     }{{ "," if not loop.last }}
 {% endfor %}
   ],
 
   "checks": {{ parallaxd_checks | to_nice_json(indent=2) | indent(2) }},
-  "components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
+	"components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
+	"maintenance": {{ parallaxd_maintenance | to_nice_json(indent=2) | indent(2) }},
+	"state_file": "/var/lib/parallaxd/state.json",
+{% if parallaxd_operator_token | trim | length > 0 %}
+	"operator_token_file": "{{ parallaxd_key_dir }}/operator-token",
+{% endif %}
 
 {% if parallaxd_heartbeat_url | length > 0 %}
   "heartbeat": {

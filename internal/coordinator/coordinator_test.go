@@ -389,14 +389,15 @@ func TestInconclusiveDoesNotClearADown(t *testing.T) {
 		t.Errorf("an inconclusive verdict changed the alert count to %d", got)
 	}
 
-	// And the state is still down, so a later recovery still reports one.
+	// And the state is still down. A lone up cannot clear it either: recovery is
+	// a decision and needs the same corroboration strength as the outage.
 	h.target.up(t)
 	if _, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusUp)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	alerts := h.notifier.all()
-	if len(alerts) != 2 || alerts[1].Kind != KindRecovered {
-		t.Errorf("alerts = %+v, want the down state to have survived the inconclusive", alerts)
+	if len(alerts) != 1 {
+		t.Errorf("alerts = %+v, want the uncorroborated recovery suppressed", alerts)
 	}
 }
 
@@ -505,6 +506,60 @@ func TestHandlerRejectsUnverifiedResults(t *testing.T) {
 	h.coord.Wait()
 	if h.notifier.count() != 0 {
 		t.Errorf("forged results produced %d alerts", h.notifier.count())
+	}
+}
+
+func TestHandlerAuthorizesAssignmentAndRejectsReplay(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+	assigned, _ := h.coord.assignedTo(h.chk)
+	var other string
+	for name := range h.probers {
+		if name != assigned {
+			other = name
+			break
+		}
+	}
+	srv := httptest.NewServer(h.coord.Handler())
+	defer srv.Close()
+	post := func(env wire.Envelope) int {
+		body, _ := json.Marshal(env)
+		resp, err := http.Post(srv.URL+"/v1/results", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	forge := func(name string) wire.Envelope {
+		env, err := wire.SignResult(h.probers[name].key, wire.ResultPayload{Result: h.reportFrom(name, check.StatusUp)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return env
+	}
+	if code := post(forge(other)); code != http.StatusForbidden {
+		t.Fatalf("unassigned result status=%d, want 403", code)
+	}
+	valid := forge(assigned)
+	if code := post(valid); code != http.StatusAccepted {
+		t.Fatalf("assigned result status=%d, want 202", code)
+	}
+	h.coord.Wait()
+	if code := post(valid); code != http.StatusConflict {
+		t.Fatalf("replayed result status=%d, want 409", code)
+	}
+}
+
+func TestCoordinatorOwnsProviderMetadata(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3, DistinctProviders: true}, nil)
+	r := h.reportFrom("probe-a", check.StatusUp)
+	r.Provider = "invented-provider"
+	v, err := h.coord.Process(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Providers) != 1 || v.Providers[0] != "probe-a" {
+		t.Fatalf("providers=%v, want registered provider", v.Providers)
 	}
 }
 
@@ -669,6 +724,50 @@ func TestNewValidates(t *testing.T) {
 		Checks: []check.Check{good}}); err != nil {
 		t.Errorf("a valid config was rejected: %v", err)
 	}
+
+	// A hard-down target commonly consumes the entire probe timeout. The
+	// coordinator still needs enough time afterward to receive and verify the
+	// signed result; otherwise every real timeout becomes an absent vote.
+	peer2 := Peer{Name: "q", URL: "http://y", PublicKey: pub}
+	slow := good
+	slow.Timeout = 15 * time.Second
+	slow.Quorum = check.Quorum{Agree: 2, Of: 2}
+	_, err = New(Config{
+		Name: "c", Key: priv, Peers: []Peer{peer, peer2}, Checks: []check.Check{slow},
+		FanOutTimeout: 10 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "leaves no response budget") {
+		t.Fatalf("short fan-out timeout error = %v, want response-budget error", err)
+	}
+}
+
+func TestCorroborationCanUseTheFullCheckTimeout(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+
+	// Keep the HTTP exchange open until the check's own deadline. This is what
+	// a black-holed host did in production: it is down evidence, but only after
+	// consuming the complete probe timeout.
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(target.Close)
+
+	h.chk.Kind = check.KindHTTP
+	h.chk.Target = target.URL
+	h.chk.Timeout = 50 * time.Millisecond
+	h.coord.checks[h.chk.Name] = h.chk
+	h.coord.cfg.FanOutTimeout = 500 * time.Millisecond
+
+	v, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusDown))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if v.Status != check.StatusDown || v.Down != 3 {
+		t.Fatalf("verdict = %+v, want three down votes after full probe timeouts", v)
+	}
+	if got := h.notifier.count(); got != 1 {
+		t.Fatalf("notifications = %d, want one immediate down alert", got)
+	}
 }
 
 // A failing notifier must not cause the same outage to alert repeatedly: the
@@ -719,9 +818,7 @@ func TestQuorumVerdictIsNotReimplemented(t *testing.T) {
 	}
 }
 
-// Probers self-schedule from their own config, so the operator has already
-// decided who runs what. A coordinator that computed a different answer and
-// reported it would disagree with what the fleet was actually doing.
+// An explicit preferred owner overrides the rendezvous choice while healthy.
 func TestExplicitProberWinsOverTheHash(t *testing.T) {
 	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
 
@@ -759,16 +856,16 @@ func TestExplicitProberWinsOverTheHash(t *testing.T) {
 // Naming a prober that is not registered means nobody the coordinator knows is
 // running the check, which is worth discovering at startup rather than during
 // an incident.
-func TestUnknownExplicitProberFallsBackAndWarns(t *testing.T) {
+func TestUnknownExplicitProberIsRejected(t *testing.T) {
 	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
 
 	chk := h.chk
 	chk.Prober = "probe-nowhere"
-	h.coord.checks["svc"] = chk
-
-	computed, _ := assign("svc", h.coord.peers)
-	if got := h.coord.Assignments()[computed.Name]; len(got) != 1 {
-		t.Errorf("assignments[%s] = %v, want the fallback to the computed assignment",
-			computed.Name, got)
+	if _, err := New(Config{
+		Name: "coordinator", Key: h.coord.cfg.Key,
+		Peers: h.coord.peers, Checks: []check.Check{chk},
+		Logger: discardLogger(),
+	}); err == nil {
+		t.Fatal("New accepted a check assigned to an unregistered prober")
 	}
 }

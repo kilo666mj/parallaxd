@@ -28,6 +28,7 @@ import (
 
 	"github.com/kilo666mj/parallaxd/internal/coordinator"
 	"github.com/kilo666mj/parallaxd/internal/watch"
+	"github.com/kilo666mj/parallaxd/internal/wire"
 )
 
 var version = "dev"
@@ -53,6 +54,9 @@ type config struct {
 	// would be silent in exactly the case it exists for.
 	Webhook        string            `json:"webhook,omitempty"`
 	WebhookHeaders map[string]string `json:"webhook_headers,omitempty"`
+
+	CoordinatorName string `json:"coordinator_name"`
+	CoordinatorKey  string `json:"coordinator_key"`
 }
 
 // There is deliberately no heartbeat back to the coordinator. The coordinator
@@ -121,23 +125,31 @@ func run(configPath string, log *slog.Logger) error {
 	}
 
 	w := watch.New(time.Duration(cfg.Grace), time.Now)
+	pub, err := wire.DecodePublicKey(cfg.CoordinatorKey)
+	if err != nil {
+		return fmt.Errorf("coordinator key: %w", err)
+	}
+	ring := wire.NewKeyring()
+	if err := ring.Add(cfg.CoordinatorName, pub); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/heartbeat", func(rw http.ResponseWriter, r *http.Request) {
-		var b watch.Beat
-		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&b); err != nil {
+		var env wire.Envelope
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 128<<10)).Decode(&env); err != nil {
 			http.Error(rw, "malformed heartbeat", http.StatusBadRequest)
 			return
 		}
-		// Unauthenticated on purpose. A forged heartbeat can only make the
-		// watcher believe the coordinator is alive — and anything able to
-		// forge one is already inside the source allowlist. Requiring a
-		// signature would mean a coordinator whose key was mis-deployed
-		// looks dead, which is a false alarm in the one place false alarms
-		// are least tolerable.
+		b, err := ring.OpenHeartbeat(env, time.Now(), time.Duration(cfg.Grace))
+		if err != nil {
+			log.Warn("refused heartbeat", "peer", env.Peer, "err", err)
+			http.Error(rw, "heartbeat rejected", http.StatusForbidden)
+			return
+		}
 		if recovered := w.Record(b); recovered {
 			alert(ctx, notifier, log, coordinator.KindWatchRecovered, w.State().Summary())
 		}
@@ -213,12 +225,15 @@ func loadConfig(path string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("read config: %w", err)
 	}
-	cfg := config{Listen: "0.0.0.0:8974", Name: "watch", Grace: duration(5 * time.Minute)}
+	cfg := config{Listen: "0.0.0.0:8974", Name: "watch", Grace: duration(5 * time.Minute), CoordinatorName: "coordinator"}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return config{}, fmt.Errorf("parse config: %w", err)
 	}
 	if time.Duration(cfg.Grace) <= 0 {
 		return config{}, errors.New("grace must be positive")
+	}
+	if cfg.CoordinatorName == "" || cfg.CoordinatorKey == "" {
+		return config{}, errors.New("coordinator_name and coordinator_key are required")
 	}
 	return cfg, nil
 }

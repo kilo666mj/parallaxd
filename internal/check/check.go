@@ -33,6 +33,10 @@ const (
 	// listening on 25" and "a mail server is answering on 25" — which is
 	// exactly the failure a bare TCP check cannot see.
 	KindBanner Kind = "banner"
+	KindDNS    Kind = "dns"
+	KindTLS    Kind = "tls"
+	KindSMTP   Kind = "smtp"
+	KindICMP   Kind = "icmp"
 )
 
 // Vantage is the network path a probe must take.
@@ -77,11 +81,9 @@ type Check struct {
 	// Prober names the prober that runs this check on its own schedule. Empty
 	// means the coordinator picks by rendezvous hashing.
 	//
-	// It exists because probers currently self-schedule from their own config,
-	// so the operator has already decided who runs what. Without a way to say
-	// so, the coordinator would report an assignment computed by a hash while a
-	// different prober actually ran the check — an inconsistency an operator
-	// would have to discover rather than be told.
+	// It is the preferred owner. Probers fetch effective assignments from the
+	// coordinator, which may temporarily move the check away from a silent or
+	// isolated owner.
 	Prober string `json:"prober,omitempty"`
 
 	// ExpectStatus, for HTTP, is the acceptable response code range. Empty
@@ -103,6 +105,13 @@ type Check struct {
 	// deny-listed by the server it was watching. "QUIT\r\n" for SMTP,
 	// "a LOGOUT\r\n" for IMAP.
 	Send string `json:"send,omitempty"`
+
+	HTTPMethod  string            `json:"http_method,omitempty"`
+	HTTPHeaders map[string]string `json:"http_headers,omitempty"`
+	HTTPBody    string            `json:"http_body,omitempty"`
+	ServerName  string            `json:"server_name,omitempty"`
+	StartTLS    bool              `json:"start_tls,omitempty"`
+	DNSRecord   string            `json:"dns_record,omitempty"`
 }
 
 // Quorum is the agreement rule.
@@ -125,7 +134,8 @@ func (c Check) Validate() error {
 	switch {
 	case strings.TrimSpace(c.Name) == "":
 		return fmt.Errorf("check name is required")
-	case c.Kind != KindTCP && c.Kind != KindHTTP && c.Kind != KindBanner:
+	case c.Kind != KindTCP && c.Kind != KindHTTP && c.Kind != KindBanner &&
+		c.Kind != KindDNS && c.Kind != KindTLS && c.Kind != KindSMTP && c.Kind != KindICMP:
 		return fmt.Errorf("check %q: unknown kind %q", c.Name, c.Kind)
 	case c.Kind == KindBanner && strings.TrimSpace(c.ExpectBody) == "":
 		// A banner check with nothing to match is a TCP check that reads a
@@ -133,6 +143,10 @@ func (c Check) Validate() error {
 		// about what they actually verify.
 		return fmt.Errorf("check %q: a banner check needs expect_body — "+
 			"without it, use kind %q", c.Name, KindTCP)
+	case len(c.HTTPBody) > 32<<10:
+		return fmt.Errorf("check %q: http_body exceeds 32 KiB", c.Name)
+	case c.Kind == KindDNS && c.DNSRecord != "" && c.DNSRecord != "A" && c.DNSRecord != "AAAA" && c.DNSRecord != "MX" && c.DNSRecord != "TXT":
+		return fmt.Errorf("check %q: dns_record must be A, AAAA, MX or TXT", c.Name)
 	case strings.TrimSpace(c.Target) == "":
 		return fmt.Errorf("check %q: target is required", c.Name)
 	case c.Vantage != VantagePublic && c.Vantage != VantageInternal:
