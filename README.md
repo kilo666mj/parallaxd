@@ -675,6 +675,20 @@ check timeout before producing its `down` result; the remaining time is the
 budget for returning and verifying that signed vote. Invalid combinations fail
 at startup instead of becoming silently inconclusive during an outage.
 
+Validate a candidate without starting listeners, restoring state, or sending
+traffic:
+
+```sh
+parallaxd -config /etc/parallaxd/coordinator.json.candidate -validate
+```
+
+Validation uses the same parser, key loading, and coordinator construction as
+startup. It rejects unknown JSON fields, trailing documents, duplicate names
+or prober keys, impossible quorums/provider diversity, invalid assignments,
+maintenance windows, check options, and unsafe timeout budgets. The Ansible
+deployment renders to a temporary path, runs this preflight with the newly
+installed binary, and only then atomically replaces the live configuration.
+
 Also worth setting on any prober that can route into a LAN: `allow_targets`.
 It defaults to empty, meaning "anywhere the built-in and vantage rules permit",
 which is right for a prober on a public network and wrong for one inside.

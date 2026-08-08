@@ -6,11 +6,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -149,6 +151,7 @@ func main() {
 		genKey     = flag.Bool("genkey", false, "generate a keypair and exit")
 		debug      = flag.Bool("debug", false, "verbose logging")
 		showVer    = flag.Bool("version", false, "print version and exit")
+		validate   = flag.Bool("validate", false, "validate config and exit")
 	)
 	flag.Parse()
 
@@ -175,6 +178,14 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(log)
+	if *validate {
+		if err := validateConfig(*configPath, log); err != nil {
+			log.Error("invalid configuration", "err", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s: valid\n", *configPath)
+		return
+	}
 
 	if err := run(*configPath, log); err != nil {
 		log.Error("fatal", "err", err)
@@ -183,77 +194,7 @@ func main() {
 }
 
 func run(configPath string, log *slog.Logger) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
-	}
-
-	rawKey, err := os.ReadFile(cfg.KeyFile)
-	if err != nil {
-		return fmt.Errorf("read key file: %w", err)
-	}
-	key, err := wire.DecodePrivateKey(strings.TrimSpace(string(rawKey)))
-	if err != nil {
-		return err
-	}
-	var operatorToken string
-	if cfg.OperatorTokenFile != "" {
-		rawToken, err := os.ReadFile(cfg.OperatorTokenFile)
-		if err != nil {
-			return fmt.Errorf("read operator token file: %w", err)
-		}
-		operatorToken = strings.TrimSpace(string(rawToken))
-		if operatorToken == "" {
-			return errors.New("operator token file is empty")
-		}
-	}
-
-	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
-	for _, p := range cfg.Probers {
-		pub, err := wire.DecodePublicKey(p.PublicKey)
-		if err != nil {
-			return fmt.Errorf("prober %q: %w", p.Name, err)
-		}
-		peers = append(peers, coordinator.Peer{
-			Name: p.Name, URL: p.URL, Provider: p.Provider, PublicKey: pub,
-		})
-	}
-
-	checks := make([]check.Check, 0, len(cfg.Checks))
-	for _, c := range cfg.Checks {
-		checks = append(checks, c.toCheck())
-	}
-
-	// The log always gets the alert. A webhook is additional, so a webhook
-	// that is down costs the integration and not the record.
-	var notifier coordinator.Notifier = coordinator.LogNotifier{Logger: log}
-	if cfg.Webhook != "" {
-		notifier = coordinator.Notifiers{
-			coordinator.LogNotifier{Logger: log},
-			coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders},
-		}
-	}
-
-	c, err := coordinator.New(coordinator.Config{
-		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
-		Components:    cfg.Components,
-		Maintenance:   cfg.Maintenance,
-		StateFile:     cfg.StateFile,
-		OperatorToken: operatorToken,
-		Notifier:      notifier,
-		Heartbeat: coordinator.Heartbeat{
-			URL:      cfg.Heartbeat.URL,
-			Interval: time.Duration(cfg.Heartbeat.Interval),
-			Headers:  cfg.Heartbeat.Headers,
-		},
-		StaleMultiplier: cfg.StaleMultiplier,
-		StaleGrace:      time.Duration(cfg.StaleGrace),
-		WatchInterval:   time.Duration(cfg.WatchInterval),
-		FanOutTimeout:   time.Duration(cfg.FanOutTimeout),
-		RequestTTL:      time.Duration(cfg.RequestTTL),
-		ResultMaxAge:    time.Duration(cfg.ResultMaxAge),
-		Logger:          log,
-	})
+	cfg, c, err := prepare(configPath, log, true)
 	if err != nil {
 		return err
 	}
@@ -281,7 +222,7 @@ func run(configPath string, log *slog.Logger) error {
 	errs := make(chan error, 1)
 	go func() {
 		log.Info("listening", "addr", cfg.Listen, "coordinator", cfg.Name,
-			"probers", len(peers), "checks", len(checks),
+			"probers", len(cfg.Probers), "checks", len(cfg.Checks),
 			"components", len(cfg.Components), "version", version)
 		for prober, assigned := range c.Assignments() {
 			log.Info("assignment", "prober", prober, "checks", assigned)
@@ -310,14 +251,110 @@ func run(configPath string, log *slog.Logger) error {
 	return nil
 }
 
+// validateConfig exercises the same parsing, key loading, and coordinator
+// construction as startup without restoring mutable state or starting any
+// network activity. Deployment tooling can therefore reject a candidate
+// before replacing the running configuration.
+func validateConfig(configPath string, log *slog.Logger) error {
+	_, _, err := prepare(configPath, log, false)
+	return err
+}
+
+func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *coordinator.Coordinator, error) {
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return config{}, nil, err
+	}
+
+	rawKey, err := os.ReadFile(cfg.KeyFile)
+	if err != nil {
+		return config{}, nil, fmt.Errorf("read key file: %w", err)
+	}
+	key, err := wire.DecodePrivateKey(strings.TrimSpace(string(rawKey)))
+	if err != nil {
+		return config{}, nil, err
+	}
+	var operatorToken string
+	if cfg.OperatorTokenFile != "" {
+		rawToken, err := os.ReadFile(cfg.OperatorTokenFile)
+		if err != nil {
+			return config{}, nil, fmt.Errorf("read operator token file: %w", err)
+		}
+		operatorToken = strings.TrimSpace(string(rawToken))
+		if operatorToken == "" {
+			return config{}, nil, errors.New("operator token file is empty")
+		}
+	}
+
+	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
+	for _, p := range cfg.Probers {
+		pub, err := wire.DecodePublicKey(p.PublicKey)
+		if err != nil {
+			return config{}, nil, fmt.Errorf("prober %q: %w", p.Name, err)
+		}
+		peers = append(peers, coordinator.Peer{
+			Name: p.Name, URL: p.URL, Provider: p.Provider, PublicKey: pub,
+		})
+	}
+
+	checks := make([]check.Check, 0, len(cfg.Checks))
+	for _, c := range cfg.Checks {
+		checks = append(checks, c.toCheck())
+	}
+
+	// The log always gets the alert. A webhook is additional, so a webhook
+	// that is down costs the integration and not the record.
+	var notifier coordinator.Notifier = coordinator.LogNotifier{Logger: log}
+	if cfg.Webhook != "" {
+		notifier = coordinator.Notifiers{
+			coordinator.LogNotifier{Logger: log},
+			coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders},
+		}
+	}
+
+	stateFile := cfg.StateFile
+	if !restoreState {
+		stateFile = ""
+	}
+	c, err := coordinator.New(coordinator.Config{
+		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
+		Components:    cfg.Components,
+		Maintenance:   cfg.Maintenance,
+		StateFile:     stateFile,
+		OperatorToken: operatorToken,
+		Notifier:      notifier,
+		Heartbeat: coordinator.Heartbeat{
+			URL:      cfg.Heartbeat.URL,
+			Interval: time.Duration(cfg.Heartbeat.Interval),
+			Headers:  cfg.Heartbeat.Headers,
+		},
+		StaleMultiplier: cfg.StaleMultiplier,
+		StaleGrace:      time.Duration(cfg.StaleGrace),
+		WatchInterval:   time.Duration(cfg.WatchInterval),
+		FanOutTimeout:   time.Duration(cfg.FanOutTimeout),
+		RequestTTL:      time.Duration(cfg.RequestTTL),
+		ResultMaxAge:    time.Duration(cfg.ResultMaxAge),
+		Logger:          log,
+	})
+	if err != nil {
+		return config{}, nil, err
+	}
+	return cfg, c, nil
+}
+
 func loadConfig(path string) (config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return config{}, fmt.Errorf("read config: %w", err)
 	}
 	cfg := config{Listen: "127.0.0.1:8972", Name: "coordinator"}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		return config{}, fmt.Errorf("parse config: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return config{}, errors.New("parse config: trailing JSON value")
 	}
 
 	switch {
