@@ -19,7 +19,10 @@
 - **Completed notification operations:** persisted per-destination outbox,
   ordered retries with exponential backoff, target/kind routing, and durable
   unacknowledged-incident escalation
-- **Next:** historical observations and operational trend views
+- **Completed historical observations:** bounded append-only history, latency
+  and availability summaries, structured DNS/TLS metadata, query APIs, and
+  dashboard trend cards
+- **Next:** coordinator high availability
 
 parallaxd is already a capable distributed monitoring system: it supports
 multiple protocols, dynamic probe assignment, failure corroboration, mesh-aware
