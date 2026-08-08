@@ -31,6 +31,7 @@ func validConfigFile(t *testing.T) string {
 		"name":            "coordinator",
 		"key_file":        keyFile,
 		"fan_out_timeout": "20s",
+		"mesh_max_age":    "3m",
 		"probers": []map[string]any{
 			{"name": "a", "url": "http://127.0.0.1:1", "provider": "one", "public_key": wire.EncodeKey(pubA)},
 			{"name": "b", "url": "http://127.0.0.1:2", "provider": "two", "public_key": wire.EncodeKey(pubB)},
