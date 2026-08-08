@@ -20,6 +20,9 @@ type persistedState struct {
 	NextIncidentID uint64                     `json:"next_incident_id"`
 	Silences       []Silence                  `json:"silences,omitempty"`
 	NextSilenceID  uint64                     `json:"next_silence_id,omitempty"`
+	Outbox         []Delivery                 `json:"outbox,omitempty"`
+	NextDeliveryID uint64                     `json:"next_delivery_id,omitempty"`
+	Escalated      map[string]time.Time       `json:"escalated,omitempty"`
 }
 type persistedEntity struct {
 	Status               check.Status           `json:"status"`
@@ -85,12 +88,15 @@ func (c *Coordinator) snapshot() persistedState {
 	for k, v := range c.componentStates {
 		components[k] = v
 	}
-	s := persistedState{Version: 2, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID}
+	s := persistedState{Version: 3, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}}
 	for k, v := range c.lastScheduled {
 		s.LastScheduled[k] = v
 	}
 	for k, v := range c.silent {
 		s.Silent[k] = v
+	}
+	for k, v := range c.escalated {
+		s.Escalated[k] = v
 	}
 	c.mu.Unlock()
 	copyEntity := func(dst map[string]persistedEntity, src map[string]*entityState) {
@@ -126,7 +132,7 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version != 1 && s.Version != 2 {
+	if s.Version != 1 && s.Version != 2 && s.Version != 3 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
 	for k, v := range s.Checks {
@@ -150,5 +156,15 @@ func (c *Coordinator) restore() error {
 	c.nextIncidentID = s.NextIncidentID
 	c.silences = s.Silences
 	c.nextSilenceID = s.NextSilenceID
+	c.outbox = append([]Delivery(nil), s.Outbox...)
+	c.nextDeliveryID = s.NextDeliveryID
+	for _, delivery := range c.outbox {
+		if c.destinations[delivery.Destination] == nil {
+			return fmt.Errorf("pending delivery %d names unavailable notification destination %q", delivery.ID, delivery.Destination)
+		}
+	}
+	for k, v := range s.Escalated {
+		c.escalated[k] = v
+	}
 	return nil
 }

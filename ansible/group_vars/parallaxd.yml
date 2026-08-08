@@ -133,6 +133,16 @@ parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
 parallaxd_webhook: "{{ parallaxd_webhook_url | default('') }}"
 parallaxd_webhook_headers: {}
 
+# Additional independently retried webhooks. Routes are optional: a
+# destination with no route receives every alert. Escalations fire once for an
+# active incident that remains unacknowledged past `after`.
+parallaxd_notification_destinations: []
+parallaxd_notification_routes: []
+parallaxd_escalations: []
+parallaxd_notification_retry_initial: 15s
+parallaxd_notification_retry_max: 15m
+parallaxd_notification_retry_interval: 5s
+
 # Enables the authenticated operator API for acknowledging/resolving incidents
 # and creating/cancelling silences. Define parallaxd_operator_token_secret in a
 # gitignored or vaulted group_vars/all.yml. Empty keeps every mutation endpoint
