@@ -7,10 +7,10 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: Phase 2 complete, not yet deployed.** Both binaries build and run,
-> and the mesh self-checks that justify the design are in. Probers still take
-> their *check* list from their own config rather than from the coordinator —
-> only the peer list is pushed.
+> **Status: Phase 3.** Coordinator, prober and watcher build and run; signed
+> dynamic assignments, automatic failover away from silent or isolated owners,
+> durable state, incident history, maintenance windows and a status dashboard
+> are included.
 
 ## The problem
 
@@ -147,8 +147,9 @@ Ed25519 throughout, with:
 - **Identity binding.** The signature proves who signed; a second check proves
   the payload claims the same identity. Otherwise one prober could sign results
   attributed to another and vote twice.
-- **Nonces and expiry on requests**, so a result answers only the request it was
-  produced for and a captured request is not replayable forever.
+- **Audience-bound, one-shot nonces and expiry on requests**, so a result
+  answers only the request it was produced for and a captured request cannot be
+  replayed or relayed to another prober.
 - **Clock-skew bounds**, so a prober with a badly wrong clock produces a visible
   error rather than results that outlive every staleness check downstream.
 - **A bounded payload**, checked before the key lookup and before any allocation
@@ -223,6 +224,22 @@ prober reports down  ->  ask Of-1 others, concurrently, with a deadline
                      ->  state machine: alert only on a transition
 ```
 
+### Check kinds
+
+| Kind | Verification |
+|---|---|
+| `tcp` | connection accepted |
+| `http` | configurable method, headers and body; expected status/body |
+| `banner` | greeting substring, with an optional polite close command |
+| `dns` | A, AAAA, MX or TXT records, with optional expected content |
+| `tls` | certificate-verified TLS 1.2+ handshake |
+| `smtp` | greeting, EHLO, optional STARTTLS and NOOP transaction |
+| `icmp` | echo request/reply; deployment grants only `CAP_NET_RAW` to the prober |
+
+HTTP headers can carry authentication, but remember that control traffic is
+authenticated rather than encrypted: without a private transport, an on-path
+observer can read check definitions, including configured headers.
+
 **Only a failure is worth asking about.** An `up` result already answers the
 question, so corroborating it would spend N probes to confirm what one prober
 can see — the cost model this design exists to avoid. A check whose quorum a
@@ -244,11 +261,12 @@ confirm an outage is not evidence that it ended.
 A first-ever `up` is not a recovery either. Announcing "recovered" for
 everything at startup is the other way a monitoring channel gets muted.
 
-Assignment is computed rather than configured — rendezvous hashing over check
-name and prober name, so adding a prober moves only the checks that should
-move, instead of reshuffling every check to a different vantage. `GET
-/v1/assignments` exposes it; `GET /v1/status` shows the current verdict per
-check.
+Assignment uses an explicit preferred owner when configured and rendezvous
+hashing otherwise. Probers fetch their signed-credential-protected assignment
+set from the coordinator and reconcile schedules without restarting. A silent
+or isolated owner is removed from the candidate set until it reports or
+rejoins. `GET /v1/assignments` exposes the effective view; `GET /v1/status`
+shows the current verdict per check.
 
 ### Alerting
 
@@ -413,6 +431,11 @@ one provider over catches a dead host, a crashed or wedged process, a bad
 deploy, and a provider-wide outage, which between them are essentially every
 way a coordinator fails.
 
+The heartbeat has its own Ed25519 protocol domain. The watcher verifies the
+coordinator identity, rejects stale and future-dated beats, rejects replays,
+and measures silence from authenticated receive time rather than trusting the
+sender's clock.
+
 ```json
 "heartbeat": {"url": "http://watcher.example:8974/v1/heartbeat", "interval": "1m"}
 ```
@@ -485,10 +508,10 @@ SILENT prober probe-c — no results for 4m30s; these checks are not being run: 
 Once, not per tick, and the return transition alerts too — otherwise an operator
 is left watching an alert that never closes.
 
-## Status export
+## Status, incidents and maintenance
 
-parallaxd exports the state a status page is built from. **It does not host
-one.**
+The coordinator serves a small operational dashboard at `/` and exports the
+same state for an off-fleet public status page.
 
 A public status page has to survive the outage it reports, and one served from
 the monitored fleet is unavailable in exactly the situation it exists for. That
@@ -515,10 +538,57 @@ trust relationship, and the export can be served from storage nobody has to
 trust. Verification and interpretation are separate: `wire.OpenDocument`
 answers "did the coordinator write this" and hands back raw bytes.
 
-What deliberately stays out: incident lifecycle, human-written updates,
-maintenance windows, subscriber notification. The value of those is that a
-person wrote them, and generating them from probe verdicts produces a worse
-page than none — flapping components, protocol jargon, no context.
+Automatic incident lifecycle is retained durably at `GET /v1/incidents`.
+Configured maintenance intervals suppress matching notifications while
+retaining a marked incident record at `GET /v1/maintenance`.
+
+An optional operator API adds human ownership without making the public status
+surface writable by accident. The dashboard accepts an operator name and token
+for the current browser tab, then exposes acknowledge, manual resolve, silence
+creation and silence cancellation controls alongside diagnostics. The token is
+kept in `sessionStorage`, is sent only in mutation requests, and is never
+embedded by the coordinator. Set `operator_token_file` to enable mutations;
+when unset, every mutation endpoint returns `503`. Mutations require
+`Authorization: Bearer ...` and record the actor and note in durable state:
+
+The token authenticates the operator but does not encrypt the connection. Use
+these mutations over loopback, an SSH tunnel, or another encrypted private
+transport; do not add the coordinator port to a public firewall allowlist and
+send the bearer token across the internet in cleartext.
+
+```sh
+curl -X POST http://127.0.0.1:8972/v1/incidents/7/acknowledge \
+  -H "Authorization: Bearer $PARALLAXD_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"alice","note":"investigating the upstream route"}'
+
+curl -X POST http://127.0.0.1:8972/v1/incidents/7/resolve \
+  -H "Authorization: Bearer $PARALLAXD_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"alice","note":"manually closed after provider confirmation"}'
+```
+
+Manual resolution closes the incident record but does not falsify the check's
+measured state. The next genuine recovery still moves the check to `up`; a
+later down transition opens a new incident.
+
+Operator-created silences are also durable and auditable. They can target
+checks, components, or probers; an empty scope is fleet-wide. Cancelling or
+expiring a silence immediately delivers any still-active incident it had
+suppressed:
+
+```sh
+curl -X POST http://127.0.0.1:8972/v1/silences \
+  -H "Authorization: Bearer $PARALLAXD_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"mail deploy","ends_at":"2030-01-02T03:04:05Z",\
+       "checks":["mx-smtp"],"actor":"alice","comment":"change 1234"}'
+```
+
+`GET /v1/diagnostics` explains the current effective and preferred owner of
+every check, result-queue pressure, rejected-result counts by reason, and
+notification attempts, failures, and last error. These counters describe the
+current coordinator process; incidents and silences are the durable record.
 
 ## Deploying
 
@@ -552,7 +622,8 @@ coordinator's, so neither can be written before both keypairs exist.
 
 **Traffic is signed, not encrypted, and the port is restricted by source.**
 
-Ed25519 both directions gives authenticity, integrity and replay resistance
+Ed25519 plus message-specific nonce/timestamp handling gives authenticity,
+integrity and replay resistance
 end-to-end — and unlike TLS it survives a proxy, because the signature covers
 the payload rather than the connection. What it does not give is
 confidentiality: an on-path observer sees check names, targets and results.
@@ -576,10 +647,11 @@ allowlist stops working and you need real transport security. Reach for
 embedded WireGuard before TLS: no expiry, no CA, and it fails closed rather
 than blinding you on a missed renewal.
 
-### One check list, not two
+### One check catalogue
 
-Probers self-schedule, so who runs what has to be stated somewhere. It is
-stated once:
+The coordinator owns the check catalogue. `prober:` is a preferred steady-state
+owner; probers fetch their current set from `GET /v1/checks`, authenticated with
+a short-lived signed credential:
 
 ```yaml
 parallaxd_checks:
@@ -593,10 +665,15 @@ parallaxd_checks:
     quorum: {agree: 2, of: 3, distinct_providers: true}
 ```
 
-The coordinator gets the whole list and honours `prober:` too, so
-`/v1/assignments` and `/v1/status` report who *actually* runs each check. Omit
-it and the coordinator falls back to rendezvous hashing — but then nothing
-templates the check onto a prober, so nothing runs it.
+`/v1/assignments` and `/v1/status` report who actually runs each check. Omit
+`prober:` and rendezvous hashing chooses the preferred owner. If that owner is
+silent or isolated, only the affected checks move to healthy probers.
+
+The coordinator's `fan_out_timeout` must be at least one second longer than
+every check that needs corroboration. A hard-down target may consume the full
+check timeout before producing its `down` result; the remaining time is the
+budget for returning and verifying that signed vote. Invalid combinations fail
+at startup instead of becoming silently inconclusive during an outage.
 
 Also worth setting on any prober that can route into a LAN: `allow_targets`.
 It defaults to empty, meaning "anywhere the built-in and vantage rules permit",

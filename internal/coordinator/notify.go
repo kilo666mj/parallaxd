@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -283,6 +285,13 @@ func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		// url.Error includes the full URL in Error(), and webhook URLs often
+		// carry a secret query token. Preserve the operation and underlying
+		// cause without leaking the destination through logs or diagnostics.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return fmt.Errorf("webhook %s failed: %w", urlErr.Op, urlErr.Err)
+		}
 		return err
 	}
 	defer resp.Body.Close()

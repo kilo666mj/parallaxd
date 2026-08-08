@@ -105,7 +105,7 @@
         dest: /usr/local/bin/parallaxd
         mode: "0755"
       when: inventory_hostname in groups['parallaxd_coordinator']
-      notify: Restart coordinator
+      register: parallaxd_coordinator_binary_install
 
     - name: Install the prober binary
       ansible.builtin.copy:
@@ -113,7 +113,7 @@
         dest: /usr/local/bin/parallaxd-probe
         mode: "0755"
       when: inventory_hostname in groups['parallaxd_probers']
-      notify: Restart prober
+      register: parallaxd_prober_binary_install
 
     - name: Install the watcher binary
       ansible.builtin.copy:
@@ -121,7 +121,7 @@
         dest: /usr/local/bin/parallaxd-watch
         mode: "0755"
       when: inventory_hostname in groups['parallaxd_watch'] | default([])
-      notify: Restart watcher
+      register: parallaxd_watcher_binary_install
 
     - name: Check whether a keypair already exists
       ansible.builtin.stat:
@@ -132,10 +132,8 @@
     # orphan the public half held by the other side, and the failure mode is a
     # prober whose results stop verifying — which reads as a silent prober,
     # not as a key problem.
-    # The watcher signs nothing and verifies nothing — it receives an
-    # unauthenticated heartbeat on purpose (a forged one can only make it
-    # believe the coordinator is alive, and anything able to forge one is
-    # already inside the source allowlist). So a watch-only host gets no key.
+    # The watcher verifies coordinator heartbeats using the coordinator public
+    # key, but signs nothing itself. A watch-only host therefore gets no keypair.
     # Resolved into a fact rather than inline, because a multi-line Jinja
     # conditional inside a YAML folded scalar (>-) is not folded: a
     # more-indented continuation line keeps its newline, and the command
@@ -220,31 +218,23 @@
       ansible.builtin.set_fact:
         parallaxd_public_key: "{{ parallaxd_public_key_raw.content | b64decode | trim }}"
 
-  handlers:
-    - name: Restart coordinator
-      ansible.builtin.systemd:
-        name: parallaxd
-        state: restarted
-        daemon_reload: true
-
-    - name: Restart prober
-      ansible.builtin.systemd:
-        name: parallaxd-probe
-        state: restarted
-        daemon_reload: true
-
-    - name: Restart watcher
-      ansible.builtin.systemd:
-        name: parallaxd-watch
-        state: restarted
-        daemon_reload: true
-
 # ---------------------------------------------------------------------------
 
 - name: Configure the watcher
   hosts: parallaxd_watch
   become: true
   tasks:
+    - name: Read the coordinator public key for the watcher
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_watch_coordinator_key_raw
+
+    - name: Record the coordinator public key for the watcher
+      ansible.builtin.set_fact:
+        parallaxd_coordinator_public_key_runtime: >-
+          {{ parallaxd_watch_coordinator_key_raw.content | b64decode | trim }}
+
     - name: Fail when the watcher shares a host with the coordinator
       ansible.builtin.assert:
         that: inventory_hostname not in groups['parallaxd_coordinator']
@@ -267,6 +257,16 @@
         src: parallaxd-watch.service.j2
         dest: /etc/systemd/system/parallaxd-watch.service
         mode: "0644"
+      notify: Restart watcher
+
+    # Binary installation happens in the key-generation play, before this
+    # service's configuration can be rendered. Delay its restart notification
+    # until now so a new binary never starts against an old, incompatible
+    # config between plays.
+    - name: Schedule watcher restart after binary update
+      ansible.builtin.debug:
+        msg: Watcher binary changed; restart after configuration is complete.
+      changed_when: parallaxd_watcher_binary_install.changed | default(false)
       notify: Restart watcher
 
     - name: Allow the coordinator to reach the watcher
@@ -301,6 +301,17 @@
   hosts: parallaxd_probers
   become: true
   tasks:
+    - name: Read the coordinator public key for the prober
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+      register: parallaxd_probe_coordinator_key_raw
+
+    - name: Record the coordinator public key for the prober
+      ansible.builtin.set_fact:
+        parallaxd_coordinator_public_key_runtime: >-
+          {{ parallaxd_probe_coordinator_key_raw.content | b64decode | trim }}
+
     - name: Fail when the prober has no provider
       ansible.builtin.assert:
         that: parallaxd_provider is defined and parallaxd_provider | length > 0
@@ -324,6 +335,12 @@
         src: parallaxd-probe.service.j2
         dest: /etc/systemd/system/parallaxd-probe.service
         mode: "0644"
+      notify: Restart prober
+
+    - name: Schedule prober restart after binary update
+      ansible.builtin.debug:
+        msg: Prober binary changed; restart after configuration is complete.
+      changed_when: parallaxd_prober_binary_install.changed | default(false)
       notify: Restart prober
 
     # The control port is reachable only from the coordinator and the other
@@ -362,6 +379,13 @@
   hosts: parallaxd_coordinator
   become: true
   tasks:
+    - name: Read prober public keys for the coordinator
+      ansible.builtin.slurp:
+        src: "{{ parallaxd_key_dir }}/public"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['parallaxd_probers'] }}"
+      register: parallaxd_coordinator_prober_keys
+
     - name: Warn when nothing is watching this coordinator
       ansible.builtin.debug:
         msg: >-
@@ -369,6 +393,17 @@
           and nothing will notice if this coordinator dies. That silence is
           indistinguishable from everything being fine.
       when: parallaxd_heartbeat_url | trim | length == 0
+
+    - name: Deploy the operator API token
+      ansible.builtin.copy:
+        content: "{{ parallaxd_operator_token | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/operator-token"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: parallaxd_operator_token | trim | length > 0
+      no_log: true
+      notify: Restart coordinator
 
     - name: Deploy the coordinator configuration
       ansible.builtin.template:
@@ -384,6 +419,12 @@
         src: parallaxd.service.j2
         dest: /etc/systemd/system/parallaxd.service
         mode: "0644"
+      notify: Restart coordinator
+
+    - name: Schedule coordinator restart after binary update
+      ansible.builtin.debug:
+        msg: Coordinator binary changed; restart after configuration is complete.
+      changed_when: parallaxd_coordinator_binary_install.changed | default(false)
       notify: Restart coordinator
 
     - name: Allow probers to reach the coordinator

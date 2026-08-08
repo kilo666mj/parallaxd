@@ -72,7 +72,7 @@ func TestRequestRoundTrip(t *testing.T) {
 	ring := ringWith(t, "coordinator", pub)
 
 	env, err := SignRequest(priv, "coordinator", Request{
-		ID: "req-1", Check: testCheck(),
+		ID: "req-1", Prober: "probe-a", Check: testCheck(),
 		IssuedAt: now, ExpiresAt: now.Add(30 * time.Second),
 	})
 	if err != nil {
@@ -176,7 +176,7 @@ func TestCrossTypeReplayIsRejected(t *testing.T) {
 	}
 
 	reqEnv, err := seal(priv, domainRequest, "peer", Request{
-		ID: "r", Check: testCheck(), ExpiresAt: now.Add(time.Minute),
+		ID: "r", Prober: "probe-a", Check: testCheck(), ExpiresAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
@@ -192,7 +192,7 @@ func TestExpiredRequestIsRejected(t *testing.T) {
 	ring := ringWith(t, "coordinator", pub)
 
 	env, err := SignRequest(priv, "coordinator", Request{
-		ID: "req-1", Check: testCheck(),
+		ID: "req-1", Prober: "probe-a", Check: testCheck(),
 		IssuedAt: now, ExpiresAt: now.Add(30 * time.Second),
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func TestRequestWithInvalidCheckIsRejected(t *testing.T) {
 	bad := testCheck()
 	bad.Vantage = "" // the field that makes corroboration meaningful
 	env, err := SignRequest(priv, "coordinator", Request{
-		ID: "req-1", Check: bad, ExpiresAt: now.Add(time.Minute),
+		ID: "req-1", Prober: "probe-a", Check: bad, ExpiresAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("SignRequest: %v", err)
@@ -229,12 +229,12 @@ func TestRequestWithInvalidCheckIsRejected(t *testing.T) {
 func TestRequestRequiresIDAndExpiry(t *testing.T) {
 	_, priv := keypair(t)
 	if _, err := SignRequest(priv, "coordinator", Request{
-		Check: testCheck(), ExpiresAt: now.Add(time.Minute),
+		Prober: "probe-a", Check: testCheck(), ExpiresAt: now.Add(time.Minute),
 	}); err == nil {
 		t.Error("a request with no id was signed")
 	}
 	if _, err := SignRequest(priv, "coordinator", Request{
-		ID: "x", Check: testCheck(),
+		ID: "x", Prober: "probe-a", Check: testCheck(),
 	}); err == nil {
 		t.Error("a request with no expiry was signed")
 	}
@@ -264,6 +264,29 @@ func TestFutureDatedResultIsRejected(t *testing.T) {
 	}
 	if _, err := ring.OpenResult(env, now); err != nil {
 		t.Errorf("modest clock skew was rejected: %v", err)
+	}
+}
+
+func TestHeartbeatRejectsForgeryAndClockPoisoning(t *testing.T) {
+	pub, priv := keypair(t)
+	ring := ringWith(t, "coordinator", pub)
+	env, err := SignHeartbeat(priv, Heartbeat{Coordinator: "coordinator", At: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ring.OpenHeartbeat(env, now, time.Minute); !errors.Is(err, ErrFromTheFuture) {
+		t.Fatalf("future heartbeat err=%v", err)
+	}
+	env, err = SignHeartbeat(priv, Heartbeat{Coordinator: "coordinator", At: now.Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ring.OpenHeartbeat(env, now, time.Minute); !errors.Is(err, ErrExpired) {
+		t.Fatalf("old heartbeat err=%v", err)
+	}
+	env.Signature[0] ^= 1
+	if _, err := ring.OpenHeartbeat(env, now, time.Hour*2); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("forged heartbeat err=%v", err)
 	}
 }
 
@@ -360,7 +383,7 @@ func TestOversizedPayloadIsRefused(t *testing.T) {
 
 	// The same guard protects the request path.
 	reqEnv, err := SignRequest(priv, "probe-a", Request{
-		ID: "r", Check: testCheck(), ExpiresAt: now.Add(time.Minute),
+		ID: "r", Prober: "probe-a", Check: testCheck(), ExpiresAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("SignRequest: %v", err)
@@ -431,7 +454,7 @@ func TestDocumentIsDomainSeparated(t *testing.T) {
 	// And the reverse: a signed request must not pass as a published document.
 	id, _ := NewRequestID()
 	req, err := SignRequest(priv, "coordinator", Request{
-		ID: id, Check: testCheck(), IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+		ID: id, Prober: "probe-a", Check: testCheck(), IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("SignRequest: %v", err)

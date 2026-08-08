@@ -6,10 +6,11 @@
 
   "coordinator_name": "coordinator",
   "coordinator_url": "{{ parallaxd_coordinator_url }}",
-  "coordinator_key": "{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_public_key'] }}",
+  "coordinator_key": "{{ parallaxd_coordinator_public_key_runtime }}",
 
   "mesh_interval": "{{ parallaxd_mesh_interval }}",
-  "mesh_timeout": "{{ parallaxd_mesh_timeout }}",
+	"mesh_timeout": "{{ parallaxd_mesh_timeout }}",
+	"assignment_interval": "{{ parallaxd_assignment_interval }}",
 
 {% if parallaxd_allow_targets | length > 0 %}
   "allow_targets": {{ parallaxd_allow_targets | to_json }},
@@ -18,12 +19,7 @@
   "deny_targets": {{ parallaxd_deny_targets | to_json }},
 {% endif %}
 
-  {# One check list, filtered here, rather than a second list per prober kept
-     in step by hand. `prober:` on a check says who runs it in steady state;
-     everything else happens on request. The coordinator gets the whole list
-     and honours the same field, so both sides agree on who runs what. #}
-  "checks": {{ parallaxd_checks
-               | selectattr('prober', 'defined')
-               | selectattr('prober', 'equalto', inventory_hostname)
-               | list | to_nice_json(indent=2) | indent(2) }}
+	{# Kept as an empty compatibility field. Effective checks are fetched from
+	   the coordinator and reconciled without restarting this service. #}
+	"checks": []
 }

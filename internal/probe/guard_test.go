@@ -79,6 +79,22 @@ func TestMappedAddressesAreUnwrapped(t *testing.T) {
 	}
 }
 
+func TestPublicVantageRejectsSpecialUseNetworks(t *testing.T) {
+	p := Policy{}
+	for _, raw := range []string{
+		"100.64.0.1", "192.0.2.1", "198.18.0.1", "203.0.113.1",
+		"64:ff9b:1::1", "2001:db8::1",
+	} {
+		addr := netip.MustParseAddr(raw)
+		if err := p.allows(check.VantagePublic, addr); err == nil {
+			t.Errorf("public vantage allowed special-use address %s", addr)
+		}
+		if err := p.allows(check.VantageInternal, addr); err != nil {
+			t.Errorf("internal vantage rejected %s: %v", addr, err)
+		}
+	}
+}
+
 // The guard runs at connect time against the resolved address, so a name that
 // resolves to a forbidden address is refused — and no packet is sent.
 func TestGuardBlocksAtDialTime(t *testing.T) {
@@ -236,10 +252,10 @@ func TestMappedAddressesMatchIPv4Prefixes(t *testing.T) {
 
 func TestIPv6Prefixes(t *testing.T) {
 	p := Policy{Allow: mustPrefixes(t, "2001:db8::/32")}
-	if err := p.allows(check.VantagePublic, netip.MustParseAddr("2001:db8::1")); err != nil {
+	if err := p.allows(check.VantageInternal, netip.MustParseAddr("2001:db8::1")); err != nil {
 		t.Errorf("an address inside the v6 allowlist was refused: %v", err)
 	}
-	if err := p.allows(check.VantagePublic, netip.MustParseAddr("2606:4700::1")); err == nil {
+	if err := p.allows(check.VantageInternal, netip.MustParseAddr("2606:4700::1")); err == nil {
 		t.Error("an address outside the v6 allowlist was permitted")
 	}
 }

@@ -338,6 +338,55 @@ func TestPeerListCredentialExpires(t *testing.T) {
 	}
 }
 
+func TestAssignmentFeedRequiresIdentityAndFailsOverIsolation(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+	base := "probe-a"
+	chk := h.coord.checks[h.chk.Name]
+	chk.Prober = base
+	h.coord.checks[h.chk.Name] = chk
+	srv := httptest.NewServer(h.coord.Handler())
+	defer srv.Close()
+	fetch := func(name, cred string) (int, []check.Check) {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/checks", nil)
+		if cred != "" {
+			req.Header.Set(wire.ProberAuthHeader, cred)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var got []check.Check
+		if resp.StatusCode == http.StatusOK {
+			json.NewDecoder(resp.Body).Decode(&got)
+		}
+		return resp.StatusCode, got
+	}
+	if code, _ := fetch(base, ""); code != http.StatusForbidden {
+		t.Fatalf("anonymous status=%d", code)
+	}
+	code, got := fetch(base, h.credentialFor(t, base, time.Now()))
+	if code != http.StatusOK || len(got) != 1 {
+		t.Fatalf("base feed status=%d checks=%v", code, got)
+	}
+	peers := map[string]bool{"probe-b": false, "probe-c": false}
+	if code := h.submitMesh(t, srv, base, peers); code != http.StatusAccepted {
+		t.Fatalf("mesh status=%d", code)
+	}
+	_, got = fetch(base, h.credentialFor(t, base, time.Now()))
+	if len(got) != 0 {
+		t.Fatalf("isolated owner retained checks: %v", got)
+	}
+	assigned, _ := h.coord.assignedTo(chk)
+	if assigned == base {
+		t.Fatal("check did not fail over")
+	}
+	_, got = fetch(assigned, h.credentialFor(t, assigned, time.Now()))
+	if len(got) != 1 {
+		t.Fatalf("fallback %s checks=%v", assigned, got)
+	}
+}
+
 func TestMeshEndpointReportsTheMap(t *testing.T) {
 	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
 	srv := httptest.NewServer(h.coord.Handler())
