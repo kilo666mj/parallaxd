@@ -669,6 +669,12 @@ parallaxd_checks:
 `prober:` and rendezvous hashing chooses the preferred owner. If that owner is
 silent or isolated, only the affected checks move to healthy probers.
 
+The coordinator's `fan_out_timeout` must be at least one second longer than
+every check that needs corroboration. A hard-down target may consume the full
+check timeout before producing its `down` result; the remaining time is the
+budget for returning and verifying that signed vote. Invalid combinations fail
+at startup instead of becoming silently inconclusive during an outage.
+
 Also worth setting on any prober that can route into a LAN: `allow_targets`.
 It defaults to empty, meaning "anywhere the built-in and vantage rules permit",
 which is right for a prober on a public network and wrong for one inside.

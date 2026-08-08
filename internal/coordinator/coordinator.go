@@ -43,8 +43,14 @@ const (
 	// already allocated; this stops an unauthenticated sender getting there.
 	maxRequestBytes = 128 << 10
 
-	defaultFanOutTimeout = 10 * time.Second
+	defaultFanOutTimeout = 20 * time.Second
 	defaultRequestTTL    = 30 * time.Second
+
+	// A corroborator needs time to finish the probe and return its signed
+	// result. Giving the outer request the same deadline as the probe races the
+	// result against cancellation; giving it less time guarantees that a
+	// target which consumes its whole timeout can never contribute a vote.
+	minimumFanOutOverhead = time.Second
 
 	// defaultResultMaxAge is how old a result may be and still count. It has
 	// to cover the whole fan-out plus clock skew between probers, and stay
@@ -293,6 +299,10 @@ func New(cfg Config) (*Coordinator, error) {
 	for _, c := range cfg.Checks {
 		if err := c.Validate(); err != nil {
 			return nil, err
+		}
+		if c.Quorum.Agree > 1 && cfg.FanOutTimeout < c.Timeout+minimumFanOutOverhead {
+			return nil, fmt.Errorf("check %q timeout %s leaves no response budget inside fan-out timeout %s; need at least %s",
+				c.Name, c.Timeout, cfg.FanOutTimeout, c.Timeout+minimumFanOutOverhead)
 		}
 		if _, dup := checks[c.Name]; dup {
 			return nil, fmt.Errorf("duplicate check name %q", c.Name)

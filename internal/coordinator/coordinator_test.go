@@ -724,6 +724,50 @@ func TestNewValidates(t *testing.T) {
 		Checks: []check.Check{good}}); err != nil {
 		t.Errorf("a valid config was rejected: %v", err)
 	}
+
+	// A hard-down target commonly consumes the entire probe timeout. The
+	// coordinator still needs enough time afterward to receive and verify the
+	// signed result; otherwise every real timeout becomes an absent vote.
+	peer2 := Peer{Name: "q", URL: "http://y", PublicKey: pub}
+	slow := good
+	slow.Timeout = 15 * time.Second
+	slow.Quorum = check.Quorum{Agree: 2, Of: 2}
+	_, err = New(Config{
+		Name: "c", Key: priv, Peers: []Peer{peer, peer2}, Checks: []check.Check{slow},
+		FanOutTimeout: 10 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "leaves no response budget") {
+		t.Fatalf("short fan-out timeout error = %v, want response-budget error", err)
+	}
+}
+
+func TestCorroborationCanUseTheFullCheckTimeout(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+
+	// Keep the HTTP exchange open until the check's own deadline. This is what
+	// a black-holed host did in production: it is down evidence, but only after
+	// consuming the complete probe timeout.
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(target.Close)
+
+	h.chk.Kind = check.KindHTTP
+	h.chk.Target = target.URL
+	h.chk.Timeout = 50 * time.Millisecond
+	h.coord.checks[h.chk.Name] = h.chk
+	h.coord.cfg.FanOutTimeout = 500 * time.Millisecond
+
+	v, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusDown))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if v.Status != check.StatusDown || v.Down != 3 {
+		t.Fatalf("verdict = %+v, want three down votes after full probe timeouts", v)
+	}
+	if got := h.notifier.count(); got != 1 {
+		t.Fatalf("notifications = %d, want one immediate down alert", got)
+	}
 }
 
 // A failing notifier must not cause the same outage to alert repeatedly: the

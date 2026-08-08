@@ -140,7 +140,12 @@ parallaxd_webhook_headers: {}
 # firewall requires deliberately adding their source address as well.
 parallaxd_operator_token: "{{ parallaxd_operator_token_secret | default('') }}"
 
-parallaxd_fan_out_timeout: 10s
+# Must exceed every corroborated check timeout. A hard-down target can consume
+# its entire probe timeout before returning a down vote, and the coordinator
+# still needs time to receive and verify the signed response. The coordinator
+# enforces at least one second of response budget at startup; five seconds here
+# leaves comfortable network and serialization headroom above the 15s checks.
+parallaxd_fan_out_timeout: 20s
 parallaxd_request_ttl: 30s
 parallaxd_result_max_age: 2m
 parallaxd_stale_multiplier: 3
