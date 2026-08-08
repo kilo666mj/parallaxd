@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -259,5 +260,17 @@ func TestRestartRejectsPendingDeliveryWithoutItsDestination(t *testing.T) {
 	cfg.Destinations = nil
 	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "unavailable notification destination") {
 		t.Fatalf("missing destination restore error = %v", err)
+	}
+}
+
+func TestIdleDeliveryLoopDoesNotWriteState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	c, err := New(durableConfig(t, path, &sequenceNotifier{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.processDeliveries(t.Context())
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("idle delivery loop wrote state: %v", err)
 	}
 }
