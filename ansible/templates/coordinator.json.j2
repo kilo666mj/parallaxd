@@ -1,7 +1,7 @@
 {
   "name": "coordinator",
   "listen": "{{ parallaxd_listen }}",
-  "key_file": "{{ parallaxd_key_dir }}/private",
+  "key_file": "{{ parallaxd_coordinator_key_file }}",
 
   "probers": [
 {% for host in groups['parallaxd_probers'] %}
@@ -51,7 +51,18 @@
   "notification_retry_interval": "{{ parallaxd_notification_retry_interval }}",
   "history_file": "{{ parallaxd_history_file }}",
   "history_retention": "{{ parallaxd_history_retention }}",
-  "history_max_per_check": {{ parallaxd_history_max_per_check }},
+	"history_max_per_check": {{ parallaxd_history_max_per_check }},
+{% if parallaxd_standby_hosts | length > 0 %}
+  "ha": {
+    "role": "{{ 'standby' if inventory_hostname in parallaxd_standby_hosts else 'primary' }}",
+{% if inventory_hostname in parallaxd_standby_hosts %}
+    "primary_url": "{{ parallaxd_ha_primary_url }}",
+{% endif %}
+    "replication_token_file": "{{ parallaxd_key_dir }}/replication-token",
+    "interval": "{{ parallaxd_ha_replication_interval }}",
+    "timeout": "{{ parallaxd_ha_replication_timeout }}"
+  },
+{% endif %}
 
   "fan_out_timeout": "{{ parallaxd_fan_out_timeout }}",
   "request_ttl": "{{ parallaxd_request_ttl }}",
