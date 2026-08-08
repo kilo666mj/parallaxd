@@ -71,6 +71,7 @@ type config struct {
 	FanOutTimeout duration `json:"fan_out_timeout,omitempty"`
 	RequestTTL    duration `json:"request_ttl,omitempty"`
 	ResultMaxAge  duration `json:"result_max_age,omitempty"`
+	MeshMaxAge    duration `json:"mesh_max_age,omitempty"`
 }
 
 type heartbeatConfig struct {
@@ -334,6 +335,7 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		FanOutTimeout:   time.Duration(cfg.FanOutTimeout),
 		RequestTTL:      time.Duration(cfg.RequestTTL),
 		ResultMaxAge:    time.Duration(cfg.ResultMaxAge),
+		MeshMaxAge:      time.Duration(cfg.MeshMaxAge),
 		Logger:          log,
 	})
 	if err != nil {
