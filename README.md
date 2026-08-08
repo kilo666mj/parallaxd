@@ -734,6 +734,9 @@ decisions), `parallaxd_probers`, and an optional single-host
 `parallaxd_standby`. The standby must name a different `parallaxd_provider`
 from the primary. It may also be a prober; the deployment keeps its prober and
 coordinator signing identities in separate files.
+The primary's operator token is copied to the standby through the same
+protected path so promotion remains authenticated even when that secret was
+originally scoped only to the primary host.
 
 **Size the fleet by provider, not by host.** Three probers behind Hetzner are
 one opinion held three times, and `distinct_providers` exists to refuse exactly
