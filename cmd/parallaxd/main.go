@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -54,8 +55,14 @@ type config struct {
 	OperatorTokenFile string `json:"operator_token_file,omitempty"`
 
 	// Webhook, when set, receives every alert as JSON in addition to the log.
-	Webhook        string            `json:"webhook,omitempty"`
-	WebhookHeaders map[string]string `json:"webhook_headers,omitempty"`
+	Webhook                   string                          `json:"webhook,omitempty"`
+	WebhookHeaders            map[string]string               `json:"webhook_headers,omitempty"`
+	NotificationDestinations  []notificationDestinationConfig `json:"notification_destinations,omitempty"`
+	NotificationRoutes        []coordinator.NotificationRoute `json:"notification_routes,omitempty"`
+	Escalations               []escalationConfig              `json:"escalations,omitempty"`
+	NotificationRetryInitial  duration                        `json:"notification_retry_initial,omitempty"`
+	NotificationRetryMax      duration                        `json:"notification_retry_max,omitempty"`
+	NotificationRetryInterval duration                        `json:"notification_retry_interval,omitempty"`
 
 	// Heartbeat is the outward dead-man's switch. Without it nothing outside
 	// the fleet notices if this coordinator dies, and the resulting silence
@@ -72,6 +79,22 @@ type config struct {
 	RequestTTL    duration `json:"request_ttl,omitempty"`
 	ResultMaxAge  duration `json:"result_max_age,omitempty"`
 	MeshMaxAge    duration `json:"mesh_max_age,omitempty"`
+}
+
+type notificationDestinationConfig struct {
+	Name    string            `json:"name"`
+	Webhook string            `json:"webhook"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+type escalationConfig struct {
+	Name        string             `json:"name"`
+	Destination string             `json:"destination"`
+	After       duration           `json:"after"`
+	Checks      []string           `json:"checks,omitempty"`
+	Components  []string           `json:"components,omitempty"`
+	Probers     []string           `json:"probers,omitempty"`
+	Kinds       []coordinator.Kind `json:"kinds,omitempty"`
 }
 
 type heartbeatConfig struct {
@@ -303,14 +326,21 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		checks = append(checks, c.toCheck())
 	}
 
-	// The log always gets the alert. A webhook is additional, so a webhook
-	// that is down costs the integration and not the record.
-	var notifier coordinator.Notifier = coordinator.LogNotifier{Logger: log}
+	// The log always gets the alert. Webhooks are independent destinations so
+	// retrying one cannot duplicate successful deliveries to another.
+	var destinations []coordinator.NotificationDestination
 	if cfg.Webhook != "" {
-		notifier = coordinator.Notifiers{
-			coordinator.LogNotifier{Logger: log},
-			coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders},
-		}
+		destinations = append(destinations, coordinator.NotificationDestination{Name: "webhook", Notifier: coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders}})
+	}
+	for _, destination := range cfg.NotificationDestinations {
+		destinations = append(destinations, coordinator.NotificationDestination{Name: destination.Name,
+			Notifier: coordinator.WebhookNotifier{URL: destination.Webhook, Headers: destination.Headers}})
+	}
+	escalations := make([]coordinator.EscalationPolicy, 0, len(cfg.Escalations))
+	for _, policy := range cfg.Escalations {
+		escalations = append(escalations, coordinator.EscalationPolicy{Name: policy.Name, Destination: policy.Destination,
+			After: time.Duration(policy.After), Checks: policy.Checks, Components: policy.Components,
+			Probers: policy.Probers, Kinds: policy.Kinds})
 	}
 
 	stateFile := cfg.StateFile
@@ -319,11 +349,17 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 	}
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
-		Components:    cfg.Components,
-		Maintenance:   cfg.Maintenance,
-		StateFile:     stateFile,
-		OperatorToken: operatorToken,
-		Notifier:      notifier,
+		Components:                cfg.Components,
+		Maintenance:               cfg.Maintenance,
+		StateFile:                 stateFile,
+		OperatorToken:             operatorToken,
+		Notifier:                  coordinator.LogNotifier{Logger: log},
+		Destinations:              destinations,
+		Routes:                    cfg.NotificationRoutes,
+		Escalations:               escalations,
+		NotificationRetryInitial:  time.Duration(cfg.NotificationRetryInitial),
+		NotificationRetryMax:      time.Duration(cfg.NotificationRetryMax),
+		NotificationRetryInterval: time.Duration(cfg.NotificationRetryInterval),
 		Heartbeat: coordinator.Heartbeat{
 			URL:      cfg.Heartbeat.URL,
 			Interval: time.Duration(cfg.Heartbeat.Interval),
@@ -376,5 +412,26 @@ func loadConfig(path string) (config, error) {
 				"its results cannot be authenticated and anything could vote as it", p.Name)
 		}
 	}
+	if cfg.Webhook != "" {
+		if err := validateWebhookURL(cfg.Webhook); err != nil {
+			return config{}, fmt.Errorf("webhook: %w", err)
+		}
+	}
+	for _, destination := range cfg.NotificationDestinations {
+		if strings.TrimSpace(destination.Name) == "" {
+			return config{}, errors.New("every notification destination needs a name")
+		}
+		if err := validateWebhookURL(destination.Webhook); err != nil {
+			return config{}, fmt.Errorf("notification destination %q: %w", destination.Name, err)
+		}
+	}
 	return cfg, nil
+}
+
+func validateWebhookURL(raw string) error {
+	u, err := url.ParseRequestURI(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("webhook must be an absolute http or https URL")
+	}
+	return nil
 }

@@ -16,8 +16,10 @@
   - staged Ansible validation before atomic config replacement
 - **Completed suspect/inconclusive timelines:** durable first-suspicion and
   corroboration-attempt metadata in status, diagnostics, alerts, and dashboard
-- **Next:** durable notification delivery, per-target routing, and escalation
-  policy
+- **Completed notification operations:** persisted per-destination outbox,
+  ordered retries with exponential backoff, target/kind routing, and durable
+  unacknowledged-incident escalation
+- **Next:** historical observations and operational trend views
 
 parallaxd is already a capable distributed monitoring system: it supports
 multiple protocols, dynamic probe assignment, failure corroboration, mesh-aware

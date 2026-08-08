@@ -37,6 +37,19 @@
 {% endif %}
 {% endif %}
 
+{% if parallaxd_notification_destinations | length > 0 %}
+  "notification_destinations": {{ parallaxd_notification_destinations | to_json }},
+{% endif %}
+{% if parallaxd_notification_routes | length > 0 %}
+  "notification_routes": {{ parallaxd_notification_routes | to_json }},
+{% endif %}
+{% if parallaxd_escalations | length > 0 %}
+  "escalations": {{ parallaxd_escalations | to_json }},
+{% endif %}
+  "notification_retry_initial": "{{ parallaxd_notification_retry_initial }}",
+  "notification_retry_max": "{{ parallaxd_notification_retry_max }}",
+  "notification_retry_interval": "{{ parallaxd_notification_retry_interval }}",
+
   "fan_out_timeout": "{{ parallaxd_fan_out_timeout }}",
   "request_ttl": "{{ parallaxd_request_ttl }}",
   "result_max_age": "{{ parallaxd_result_max_age }}",
