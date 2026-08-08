@@ -22,10 +22,16 @@ type persistedState struct {
 	NextSilenceID  uint64                     `json:"next_silence_id,omitempty"`
 }
 type persistedEntity struct {
-	Status      check.Status `json:"status"`
-	Stale       bool         `json:"stale"`
-	Since       time.Time    `json:"since"`
-	LastVerdict time.Time    `json:"last_verdict"`
+	Status               check.Status           `json:"status"`
+	Stale                bool                   `json:"stale"`
+	Since                time.Time              `json:"since"`
+	LastVerdict          time.Time              `json:"last_verdict"`
+	SuspectedSince       time.Time              `json:"suspected_since,omitempty"`
+	LastAttempt          time.Time              `json:"last_attempt,omitempty"`
+	LastCorroboration    time.Duration          `json:"last_corroboration,omitempty"`
+	InconclusiveAttempts uint64                 `json:"inconclusive_attempts,omitempty"`
+	LastInconclusive     string                 `json:"last_inconclusive_reason,omitempty"`
+	InconclusiveHistory  []CorroborationAttempt `json:"inconclusive_history,omitempty"`
 }
 
 func (c *Coordinator) persist() {
@@ -90,7 +96,13 @@ func (c *Coordinator) snapshot() persistedState {
 	copyEntity := func(dst map[string]persistedEntity, src map[string]*entityState) {
 		for k, v := range src {
 			v.mu.Lock()
-			dst[k] = persistedEntity{v.status, v.stale, v.since, v.lastVerdict}
+			dst[k] = persistedEntity{
+				Status: v.status, Stale: v.stale, Since: v.since, LastVerdict: v.lastVerdict,
+				SuspectedSince: v.suspectedSince, LastAttempt: v.lastAttempt,
+				LastCorroboration: v.lastCorroboration, InconclusiveAttempts: v.inconclusiveAttempts,
+				LastInconclusive:    v.lastInconclusive,
+				InconclusiveHistory: append([]CorroborationAttempt(nil), v.inconclusiveHistory...),
+			}
 			v.mu.Unlock()
 		}
 	}
@@ -119,7 +131,10 @@ func (c *Coordinator) restore() error {
 	}
 	for k, v := range s.Checks {
 		if _, ok := c.checks[k]; ok {
-			c.states[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict}
+			c.states[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict,
+				suspectedSince: v.SuspectedSince, lastAttempt: v.LastAttempt, lastCorroboration: v.LastCorroboration,
+				inconclusiveAttempts: v.InconclusiveAttempts, lastInconclusive: v.LastInconclusive}
+			c.states[k].inconclusiveHistory = append([]CorroborationAttempt(nil), v.InconclusiveHistory...)
 		}
 	}
 	for k, v := range s.Components {
