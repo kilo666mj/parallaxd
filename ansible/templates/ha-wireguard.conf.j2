@@ -34,7 +34,11 @@ AllowedIPs = {{ hostvars[host]['parallaxd_address'] }}/32
 [Peer]
 PublicKey = {{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_ha_wireguard_public_key'] }}
 Endpoint = {{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}:{{ parallaxd_ha_wireguard_port }}
-AllowedIPs = {{ parallaxd_ha_primary_address }}/32{% for host in parallaxd_internal_prober_hosts if host != inventory_hostname %}, {{ hostvars[host]['parallaxd_address'] }}/32{% endfor %}
+AllowedIPs = {{ (([parallaxd_ha_primary_address]
+                    + (parallaxd_internal_prober_hosts
+                       | reject('equalto', inventory_hostname)
+                       | map('extract', hostvars, 'parallaxd_address') | list))
+                   | map('regex_replace', '$', '/32') | join(', ')) }}
 PersistentKeepalive = 30
 
 [Peer]
