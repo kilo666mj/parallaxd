@@ -625,6 +625,9 @@
             owner: root
             group: "{{ parallaxd_group }}"
             mode: "0640"
+          # This file is temporary validation workspace. The atomic install
+          # below owns change reporting for persistent coordinator state.
+          changed_when: false
 
         - name: Validate the coordinator configuration candidate
           ansible.builtin.command:
@@ -651,6 +654,7 @@
           ansible.builtin.file:
             path: "{{ parallaxd_config_dir }}/coordinator.json.candidate"
             state: absent
+          changed_when: false
 
     - name: Deploy the coordinator unit
       ansible.builtin.template:
