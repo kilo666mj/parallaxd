@@ -146,7 +146,7 @@ func (c *Coordinator) DiagnosticState() Diagnostics {
 	}
 	c.mu.Unlock()
 	unavailable := c.unavailableProbers()
-	for _, chk := range c.checks {
+	for _, chk := range c.allChecks() {
 		preferred, _ := c.baseAssignedTo(chk)
 		effective, _ := c.assignedTo(chk)
 		reason := "preferred owner active"

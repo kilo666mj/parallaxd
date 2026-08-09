@@ -267,7 +267,8 @@ func (c *Coordinator) staleAfter(chk check.Check) time.Duration {
 func (c *Coordinator) staleChecks() map[string]time.Duration {
 	now := c.now()
 	out := map[string]time.Duration{}
-	for name, chk := range c.checks {
+	for _, chk := range c.allChecks() {
+		name := chk.Name
 		last := c.startedAt
 
 		c.mu.Lock()
@@ -321,7 +322,8 @@ func (c *Coordinator) CheckStaleness(ctx context.Context) {
 	// its prober died would announce itself as a brand new outage the moment
 	// the prober came back. Readers see unknown either way — see
 	// entityState.reported — but the dedup state underneath survives.
-	for name := range c.checks {
+	for _, chk := range c.allChecks() {
+		name := chk.Name
 		st := c.stateFor(name)
 		_, isStale := stale[name]
 		st.mu.Lock()
@@ -336,8 +338,10 @@ func (c *Coordinator) CheckStaleness(ctx context.Context) {
 	byProber := map[string][]string{}
 	for name := range stale {
 		who := "(unassigned)"
-		if assigned, ok := c.baseAssignedTo(c.checks[name]); ok {
-			who = assigned
+		if chk, exists := c.checkByName(name); exists {
+			if assigned, ok := c.baseAssignedTo(chk); ok {
+				who = assigned
+			}
 		}
 		byProber[who] = append(byProber[who], name)
 	}
@@ -378,7 +382,7 @@ func (c *Coordinator) applySilence(
 		var longest time.Duration
 		for _, name := range checks {
 			m := Member{Check: name, Status: string(check.StatusUnknown)}
-			if chk, ok := c.checks[name]; ok {
+			if chk, ok := c.checkByName(name); ok {
 				m.Target = chk.Target
 			}
 			members = append(members, m)
