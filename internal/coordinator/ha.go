@@ -191,7 +191,7 @@ func (c *Coordinator) syncReplica(ctx context.Context) {
 func (c *Coordinator) applyReplica(document replicaDocument) error {
 	c.haMu.Lock()
 	defer c.haMu.Unlock()
-	if document.State.Version < 1 || document.State.Version > 5 {
+	if document.State.Version < 1 || document.State.Version > 6 {
 		return fmt.Errorf("unsupported replicated state version %d", document.State.Version)
 	}
 	if err := c.applyPersistedState(document.State, true); err != nil {
@@ -297,7 +297,8 @@ func (c *Coordinator) handleReplica(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Coordinator) handlePromote(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionManageAuth)
+	if !ok {
 		return
 	}
 	var request struct {
@@ -308,6 +309,7 @@ func (c *Coordinator) handlePromote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	request.Actor = mutationActor(principal, request.Actor)
 	if strings.TrimSpace(request.Actor) == "" {
 		http.Error(w, "actor is required", http.StatusBadRequest)
 		return
@@ -324,7 +326,7 @@ func (c *Coordinator) handleHAStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func standbyBlocks(r *http.Request) bool {
-	if r.Method == http.MethodPost || r.Method == http.MethodDelete {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 		return r.URL.Path != "/v1/ha/promote"
 	}
 	return r.URL.Path == "/v1/assignments" || r.URL.Path == "/v1/checks"

@@ -102,10 +102,17 @@ type Config struct {
 	Maintenance []Maintenance
 	StateFile   string
 
-	// OperatorToken enables authenticated incident and silence mutations.
-	// Read-only status endpoints remain available without it. An empty token
-	// disables every write endpoint rather than exposing control by accident.
+	// OperatorToken is the legacy administrator and break-glass credential.
+	// Local users, OIDC sessions, and scoped API tokens are preferred.
 	OperatorToken string
+
+	// SessionTTL controls browser login lifetime. InsecureSessionCookies is
+	// intended only for local HTTP development; production cookies are Secure.
+	SessionTTL             time.Duration
+	InsecureSessionCookies bool
+	BootstrapAdminUsername string
+	BootstrapAdminPassword string
+	OIDC                   OIDCConfig
 
 	// Notifier receives alerts. Nil means log only.
 	Notifier Notifier
@@ -226,6 +233,13 @@ type Coordinator struct {
 	monitorRevisions    []MonitorRevision
 	nextMonitorRevision uint64
 
+	authMu        sync.Mutex
+	users         map[string]User
+	apiTokens     map[string]APIToken
+	sessions      map[string]Session
+	loginFailures map[string][]time.Time
+	oidc          oidcRuntime
+
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
 	silent map[string]bool
@@ -331,6 +345,9 @@ func New(cfg Config) (*Coordinator, error) {
 	if cfg.MaxPendingResults <= 0 {
 		cfg.MaxPendingResults = defaultMaxPendingResults
 	}
+	if cfg.SessionTTL <= 0 {
+		cfg.SessionTTL = 12 * time.Hour
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -350,6 +367,9 @@ func New(cfg Config) (*Coordinator, error) {
 		return nil, errors.New("history retention and max_per_check cannot be negative")
 	}
 	if err := validateHAConfig(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateOIDCConfig(cfg.OIDC); err != nil {
 		return nil, err
 	}
 
@@ -457,11 +477,16 @@ func New(cfg Config) (*Coordinator, error) {
 		diagnostics: Diagnostics{
 			RejectedResults: map[string]uint64{},
 		},
-		destinations: map[string]Notifier{"default": cfg.Notifier},
-		escalated:    map[string]time.Time{},
-		history:      map[string][]Observation{},
-		promoteCh:    make(chan struct{}),
-		monitors:     map[string]MonitorSpec{},
+		destinations:  map[string]Notifier{"default": cfg.Notifier},
+		escalated:     map[string]time.Time{},
+		history:       map[string][]Observation{},
+		promoteCh:     make(chan struct{}),
+		monitors:      map[string]MonitorSpec{},
+		users:         map[string]User{},
+		apiTokens:     map[string]APIToken{},
+		sessions:      map[string]Session{},
+		loginFailures: map[string][]time.Time{},
+		oidc:          oidcRuntime{attempts: map[string]oidcAttempt{}},
 	}
 	for _, chk := range cfg.Checks {
 		monitor := monitorFromCheck(chk)
@@ -479,6 +504,9 @@ func New(cfg Config) (*Coordinator, error) {
 		if err := coord.loadHistory(); err != nil {
 			return nil, err
 		}
+	}
+	if err := coord.ensureBootstrapAdmin(); err != nil {
+		return nil, err
 	}
 	return coord, nil
 }
@@ -886,6 +914,19 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/deliveries", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) })
 	mux.HandleFunc("GET /v1/history", c.handleHistory)
 	mux.HandleFunc("GET /v1/history/summary", c.handleHistorySummary)
+	mux.HandleFunc("GET /v1/auth/me", c.handleAuthMe)
+	mux.HandleFunc("POST /v1/auth/login", c.handleLogin)
+	mux.HandleFunc("POST /v1/auth/logout", c.handleLogout)
+	mux.HandleFunc("POST /v1/auth/password", c.handleChangePassword)
+	mux.HandleFunc("GET /v1/auth/oidc/start", c.handleOIDCStart)
+	mux.HandleFunc("GET /v1/auth/oidc/callback", c.handleOIDCCallback)
+	mux.HandleFunc("GET /v1/auth/users", c.handleUsers)
+	mux.HandleFunc("POST /v1/auth/users", c.handleUsers)
+	mux.HandleFunc("PUT /v1/auth/users/{username}", c.handleUser)
+	mux.HandleFunc("DELETE /v1/auth/users/{username}", c.handleUser)
+	mux.HandleFunc("GET /v1/auth/tokens", c.handleTokens)
+	mux.HandleFunc("POST /v1/auth/tokens", c.handleTokens)
+	mux.HandleFunc("DELETE /v1/auth/tokens/{id}", c.handleToken)
 	mux.HandleFunc("GET /v1/monitors", c.handleMonitors)
 	mux.HandleFunc("GET /v1/monitor-options", c.handleMonitorOptions)
 	mux.HandleFunc("POST /v1/monitors", c.handleCreateMonitor)

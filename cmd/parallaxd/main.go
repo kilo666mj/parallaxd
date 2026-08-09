@@ -49,10 +49,14 @@ type config struct {
 	Components  []check.Component         `json:"components,omitempty"`
 	Maintenance []coordinator.Maintenance `json:"maintenance,omitempty"`
 	StateFile   string                    `json:"state_file,omitempty"`
-	// OperatorTokenFile enables authenticated incident and silence mutations.
-	// Keeping the bearer token out of the JSON makes normal config inspection
-	// safe and lets deployment tooling apply tighter file permissions.
-	OperatorTokenFile string `json:"operator_token_file,omitempty"`
+	// OperatorTokenFile is the legacy administrator and break-glass credential.
+	// Keeping it out of JSON makes normal config inspection safe.
+	OperatorTokenFile      string     `json:"operator_token_file,omitempty"`
+	SessionTTL             duration   `json:"session_ttl,omitempty"`
+	InsecureSessionCookies bool       `json:"insecure_session_cookies,omitempty"`
+	BootstrapAdmin         string     `json:"bootstrap_admin,omitempty"`
+	BootstrapPasswordFile  string     `json:"bootstrap_password_file,omitempty"`
+	OIDC                   oidcConfig `json:"oidc,omitempty"`
 
 	// Webhook, when set, receives every alert as JSON in addition to the log.
 	Webhook                   string                          `json:"webhook,omitempty"`
@@ -97,6 +101,17 @@ type haConfig struct {
 	ReplicationTokenFile string   `json:"replication_token_file,omitempty"`
 	Interval             duration `json:"interval,omitempty"`
 	Timeout              duration `json:"timeout,omitempty"`
+}
+
+type oidcConfig struct {
+	Issuer               string `json:"issuer,omitempty"`
+	ClientID             string `json:"client_id,omitempty"`
+	ClientSecretFile     string `json:"client_secret_file,omitempty"`
+	RedirectURL          string `json:"redirect_url,omitempty"`
+	UsernameClaim        string `json:"username_claim,omitempty"`
+	Label                string `json:"label,omitempty"`
+	AllowInsecureIssuer  bool   `json:"allow_insecure_issuer,omitempty"`
+	AllowUnverifiedEmail bool   `json:"allow_unverified_email,omitempty"`
 }
 
 type escalationConfig struct {
@@ -332,6 +347,28 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 			return config{}, nil, errors.New("replication token file is empty")
 		}
 	}
+	var bootstrapPassword string
+	if cfg.BootstrapAdmin != "" || cfg.BootstrapPasswordFile != "" {
+		if cfg.BootstrapAdmin == "" || cfg.BootstrapPasswordFile == "" {
+			return config{}, nil, errors.New("bootstrap_admin and bootstrap_password_file must be configured together")
+		}
+		rawPassword, err := os.ReadFile(cfg.BootstrapPasswordFile)
+		if err != nil {
+			return config{}, nil, fmt.Errorf("read bootstrap password file: %w", err)
+		}
+		bootstrapPassword = strings.TrimSpace(string(rawPassword))
+	}
+	var oidcClientSecret string
+	if cfg.OIDC.ClientSecretFile != "" {
+		rawSecret, err := os.ReadFile(cfg.OIDC.ClientSecretFile)
+		if err != nil {
+			return config{}, nil, fmt.Errorf("read OIDC client secret file: %w", err)
+		}
+		oidcClientSecret = strings.TrimSpace(string(rawSecret))
+		if oidcClientSecret == "" {
+			return config{}, nil, errors.New("OIDC client secret file is empty")
+		}
+	}
 
 	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
 	for _, p := range cfg.Probers {
@@ -368,10 +405,19 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 
 	c, err := coordinator.New(coordinator.Config{
 		Name: cfg.Name, Key: key, Peers: peers, Checks: checks,
-		Components:                cfg.Components,
-		Maintenance:               cfg.Maintenance,
-		StateFile:                 cfg.StateFile,
-		OperatorToken:             operatorToken,
+		Components:             cfg.Components,
+		Maintenance:            cfg.Maintenance,
+		StateFile:              cfg.StateFile,
+		OperatorToken:          operatorToken,
+		SessionTTL:             time.Duration(cfg.SessionTTL),
+		InsecureSessionCookies: cfg.InsecureSessionCookies,
+		BootstrapAdminUsername: cfg.BootstrapAdmin,
+		BootstrapAdminPassword: bootstrapPassword,
+		OIDC: coordinator.OIDCConfig{Issuer: cfg.OIDC.Issuer, ClientID: cfg.OIDC.ClientID,
+			ClientSecret: oidcClientSecret, RedirectURL: cfg.OIDC.RedirectURL,
+			UsernameClaim: cfg.OIDC.UsernameClaim, Label: cfg.OIDC.Label,
+			AllowInsecureIssuer:  cfg.OIDC.AllowInsecureIssuer,
+			AllowUnverifiedEmail: cfg.OIDC.AllowUnverifiedEmail},
 		Notifier:                  coordinator.LogNotifier{Logger: log},
 		Destinations:              destinations,
 		Routes:                    cfg.NotificationRoutes,

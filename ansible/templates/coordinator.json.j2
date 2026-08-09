@@ -18,8 +18,26 @@
 	"components": {{ parallaxd_components | to_nice_json(indent=2) | indent(2) }},
 	"maintenance": {{ parallaxd_maintenance | to_nice_json(indent=2) | indent(2) }},
 	"state_file": "/var/lib/parallaxd/state.json",
+	"session_ttl": "{{ parallaxd_session_ttl }}",
 {% if parallaxd_operator_token | trim | length > 0 or inventory_hostname in parallaxd_standby_hosts %}
 	"operator_token_file": "{{ parallaxd_key_dir }}/operator-token",
+{% endif %}
+{% if parallaxd_bootstrap_admin | trim | length > 0 %}
+  "bootstrap_admin": {{ parallaxd_bootstrap_admin | to_json }},
+  "bootstrap_password_file": "{{ parallaxd_key_dir }}/bootstrap-password",
+{% endif %}
+{% if parallaxd_oidc_issuer | trim | length > 0 %}
+  "oidc": {
+    "issuer": {{ parallaxd_oidc_issuer | to_json }},
+    "client_id": {{ parallaxd_oidc_client_id | to_json }},
+{% if parallaxd_oidc_client_secret | trim | length > 0 %}
+    "client_secret_file": "{{ parallaxd_key_dir }}/oidc-client-secret",
+{% endif %}
+    "redirect_url": {{ parallaxd_oidc_redirect_url | to_json }},
+    "username_claim": {{ parallaxd_oidc_username_claim | to_json }},
+    "label": {{ parallaxd_oidc_label | to_json }},
+    "allow_unverified_email": {{ parallaxd_oidc_allow_unverified_email | to_json }}
+  },
 {% endif %}
 
 {% if parallaxd_heartbeat_url | length > 0 %}

@@ -179,3 +179,38 @@ func TestValidateConfigAcceptsDurableStandby(t *testing.T) {
 		t.Fatalf("validateConfig: %v", err)
 	}
 }
+
+func TestValidateConfigAcceptsLocalIdentityAndOIDCSecretFiles(t *testing.T) {
+	path := validConfigFile(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	passwordFile := filepath.Join(dir, "bootstrap-password")
+	secretFile := filepath.Join(dir, "oidc-secret")
+	if err := os.WriteFile(passwordFile, []byte("correct horse battery staple\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretFile, []byte("client-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	doc["session_ttl"] = "8h"
+	doc["bootstrap_admin"] = "admin@example.com"
+	doc["bootstrap_password_file"] = passwordFile
+	doc["oidc"] = map[string]any{"issuer": "https://id.example.com", "client_id": "parallaxd", "client_secret_file": secretFile, "redirect_url": "https://status.example.com/v1/auth/oidc/callback", "username_claim": "email"}
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfig(path, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("validateConfig: %v", err)
+	}
+}

@@ -554,6 +554,28 @@
       no_log: true
       notify: Restart coordinator
 
+    - name: Deploy the bootstrap administrator password
+      ansible.builtin.copy:
+        content: "{{ parallaxd_bootstrap_password | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/bootstrap-password"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: parallaxd_bootstrap_admin | trim | length > 0
+      no_log: true
+      notify: Restart coordinator
+
+    - name: Deploy the OIDC client secret
+      ansible.builtin.copy:
+        content: "{{ parallaxd_oidc_client_secret | trim }}\n"
+        dest: "{{ parallaxd_key_dir }}/oidc-client-secret"
+        owner: "{{ parallaxd_user }}"
+        group: "{{ parallaxd_group }}"
+        mode: "0400"
+      when: parallaxd_oidc_client_secret | trim | length > 0
+      no_log: true
+      notify: Restart coordinator
+
     - name: Deploy the HA replication token
       ansible.builtin.copy:
         content: "{{ parallaxd_ha_replication_token | trim }}\n"
