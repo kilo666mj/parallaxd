@@ -27,6 +27,7 @@ type MonitorSpec struct {
 	Timeout      string            `json:"timeout"`
 	Quorum       check.Quorum      `json:"quorum"`
 	Prober       string            `json:"prober,omitempty"`
+	Probers      []string          `json:"probers,omitempty"`
 	ExpectStatus []int             `json:"expect_status,omitempty"`
 	ExpectBody   string            `json:"expect_body,omitempty"`
 	Send         string            `json:"send,omitempty"`
@@ -56,7 +57,7 @@ type MonitorTestResult struct {
 func monitorFromCheck(chk check.Check) MonitorSpec {
 	return MonitorSpec{Name: chk.Name, Enabled: true, Kind: chk.Kind, Target: chk.Target,
 		Vantage: chk.Vantage, Interval: chk.Interval.String(), Timeout: chk.Timeout.String(),
-		Quorum: chk.Quorum, Prober: chk.Prober, ExpectStatus: append([]int(nil), chk.ExpectStatus...),
+		Quorum: chk.Quorum, Prober: chk.Prober, Probers: append([]string(nil), chk.Probers...), ExpectStatus: append([]int(nil), chk.ExpectStatus...),
 		ExpectBody: chk.ExpectBody, Send: chk.Send, HTTPMethod: chk.HTTPMethod,
 		HTTPHeaders: cloneStrings(chk.HTTPHeaders), HTTPBody: chk.HTTPBody,
 		ServerName: chk.ServerName, StartTLS: chk.StartTLS, DNSRecord: chk.DNSRecord}
@@ -73,7 +74,7 @@ func (m MonitorSpec) toCheck() (check.Check, error) {
 	}
 	return check.Check{Name: strings.TrimSpace(m.Name), Kind: m.Kind, Target: strings.TrimSpace(m.Target),
 		Vantage: m.Vantage, Interval: interval, Timeout: timeout, Quorum: m.Quorum,
-		Prober: m.Prober, ExpectStatus: append([]int(nil), m.ExpectStatus...), ExpectBody: m.ExpectBody,
+		Prober: m.Prober, Probers: append([]string(nil), m.Probers...), ExpectStatus: append([]int(nil), m.ExpectStatus...), ExpectBody: m.ExpectBody,
 		Send: m.Send, HTTPMethod: m.HTTPMethod, HTTPHeaders: cloneStrings(m.HTTPHeaders),
 		HTTPBody: m.HTTPBody, ServerName: m.ServerName, StartTLS: m.StartTLS, DNSRecord: m.DNSRecord}, nil
 }
@@ -90,6 +91,7 @@ func cloneStrings(in map[string]string) map[string]string {
 }
 
 func cloneMonitor(m MonitorSpec) MonitorSpec {
+	m.Probers = append([]string(nil), m.Probers...)
 	m.ExpectStatus = append([]int(nil), m.ExpectStatus...)
 	m.HTTPHeaders = cloneStrings(m.HTTPHeaders)
 	return m
@@ -161,12 +163,16 @@ func (c *Coordinator) validateMonitorCatalog(monitors []MonitorSpec) (map[string
 			return nil, fmt.Errorf("check %q timeout %s leaves no response budget inside fan-out timeout %s; need at least %s",
 				chk.Name, chk.Timeout, c.cfg.FanOutTimeout, chk.Timeout+minimumFanOutOverhead)
 		}
-		if chk.Quorum.Of > len(c.peers) {
-			return nil, fmt.Errorf("check %q asks %d probers but only %d are registered", chk.Name, chk.Quorum.Of, len(c.peers))
+		eligiblePeers, err := validateEligibleProbers(chk, c.peers, c.byName)
+		if err != nil {
+			return nil, err
+		}
+		if chk.Quorum.Of > len(eligiblePeers) {
+			return nil, fmt.Errorf("check %q asks %d probers but only %d are eligible", chk.Name, chk.Quorum.Of, len(eligiblePeers))
 		}
 		if chk.Quorum.DistinctProviders {
 			providers := map[string]bool{}
-			for _, peer := range c.peers {
+			for _, peer := range eligiblePeers {
 				if strings.TrimSpace(peer.Provider) != "" {
 					providers[peer.Provider] = true
 				}
@@ -423,7 +429,12 @@ func (c *Coordinator) handleTestMonitor(w http.ResponseWriter, r *http.Request) 
 	}
 	names := request.Probers
 	if len(names) == 0 {
-		for _, peer := range c.peers {
+		eligible, eligibleErr := validateEligibleProbers(chk, c.peers, c.byName)
+		if eligibleErr != nil {
+			http.Error(w, eligibleErr.Error(), http.StatusBadRequest)
+			return
+		}
+		for _, peer := range eligible {
 			names = append(names, peer.Name)
 		}
 	}
