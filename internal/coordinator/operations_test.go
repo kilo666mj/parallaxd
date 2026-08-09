@@ -41,6 +41,16 @@ func TestIncidentsIsAnEmptyCollectionBeforeFirstIncident(t *testing.T) {
 	}
 }
 
+func TestSilencesIsAnEmptyCollectionBeforeFirstSilence(t *testing.T) {
+	c, err := New(durableConfig(t, "", &fakeNotifier{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if silences := c.Silences(); silences == nil || len(silences) != 0 {
+		t.Fatalf("Silences()=%v, want a non-nil empty collection", silences)
+	}
+}
+
 func downResult(at time.Time) check.Result {
 	return check.Result{Check: "svc", Prober: "probe-a", Vantage: check.VantageInternal, Status: check.StatusDown, At: at}
 }
@@ -279,7 +289,7 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 			t.Errorf("dashboard does not contain %q", want)
 		}
 	}
-	for _, want := range []string{"incidents:i||[]", "silences:s||[]", "$('history').innerHTML"} {
+	for _, want := range []string{"incidents:i||[]", "silences:s||[]", "(state.monitors||[]).filter", "(state.incidents||[]).filter", "(state.silences||[]).filter", "$('history').innerHTML"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard does not contain empty-collection guard %q", want)
 		}
