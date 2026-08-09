@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
@@ -29,6 +30,9 @@ type persistedState struct {
 	Monitors            []MonitorSpec              `json:"monitors,omitempty"`
 	MonitorRevisions    []MonitorRevision          `json:"monitor_revisions,omitempty"`
 	NextMonitorRevision uint64                     `json:"next_monitor_revision,omitempty"`
+	Users               []persistedUser            `json:"users,omitempty"`
+	APITokens           []persistedAPIToken        `json:"api_tokens,omitempty"`
+	Sessions            []Session                  `json:"sessions,omitempty"`
 }
 type persistedEntity struct {
 	Status               check.Status           `json:"status"`
@@ -110,7 +114,7 @@ func (c *Coordinator) snapshot() persistedState {
 	for k, v := range c.componentStates {
 		components[k] = v
 	}
-	s := persistedState{Version: 5, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy, Monitors: c.monitorList(), MonitorRevisions: append([]MonitorRevision(nil), c.monitorRevisions...), NextMonitorRevision: c.nextMonitorRevision}
+	s := persistedState{Version: 6, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy, Monitors: c.monitorList(), MonitorRevisions: append([]MonitorRevision(nil), c.monitorRevisions...), NextMonitorRevision: c.nextMonitorRevision}
 	for k, v := range c.lastScheduled {
 		s.LastScheduled[k] = v
 	}
@@ -121,6 +125,19 @@ func (c *Coordinator) snapshot() persistedState {
 		s.Escalated[k] = v
 	}
 	c.mu.Unlock()
+	c.authMu.Lock()
+	for _, user := range c.users {
+		s.Users = append(s.Users, persistedUser{Username: user.Username, Role: user.Role, PasswordHash: user.PasswordHash, Disabled: user.Disabled, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt})
+	}
+	for _, token := range c.apiTokens {
+		s.APITokens = append(s.APITokens, persistedAPIToken{APIToken: token, TokenHash: token.TokenHash})
+	}
+	for _, session := range c.sessions {
+		if c.now().Before(session.ExpiresAt) {
+			s.Sessions = append(s.Sessions, session)
+		}
+	}
+	c.authMu.Unlock()
 	copyEntity := func(dst map[string]persistedEntity, src map[string]*entityState) {
 		for k, v := range src {
 			v.mu.Lock()
@@ -154,7 +171,7 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version < 1 || s.Version > 5 {
+	if s.Version < 1 || s.Version > 6 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
 	return c.applyPersistedState(s, false)
@@ -165,6 +182,33 @@ func (c *Coordinator) applyPersistedState(s persistedState, replicated bool) err
 		if err := c.replaceMonitorCatalog(s.Monitors); err != nil {
 			return fmt.Errorf("restore monitor catalogue: %w", err)
 		}
+	}
+	if s.Version >= 6 {
+		users := make(map[string]User, len(s.Users))
+		for _, stored := range s.Users {
+			if !validUsername(stored.Username) || !validRole(stored.Role) || (stored.PasswordHash != "" && !strings.HasPrefix(stored.PasswordHash, "$argon2id$")) {
+				return fmt.Errorf("restore invalid user %q", stored.Username)
+			}
+			users[stored.Username] = User{Username: stored.Username, Role: stored.Role, PasswordHash: stored.PasswordHash, Disabled: stored.Disabled, CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt}
+		}
+		tokens := make(map[string]APIToken, len(s.APITokens))
+		for _, stored := range s.APITokens {
+			if stored.ID == "" || !validRole(stored.Role) || len(stored.TokenHash) != 64 {
+				return fmt.Errorf("restore invalid API token %q", stored.ID)
+			}
+			token := stored.APIToken
+			token.TokenHash = stored.TokenHash
+			tokens[token.ID] = token
+		}
+		sessions := make(map[string]Session, len(s.Sessions))
+		for _, session := range s.Sessions {
+			if len(session.TokenHash) == 64 && len(session.CSRFHash) == 64 && c.now().Before(session.ExpiresAt) {
+				sessions[session.TokenHash] = session
+			}
+		}
+		c.authMu.Lock()
+		c.users, c.apiTokens, c.sessions = users, tokens, sessions
+		c.authMu.Unlock()
 	}
 	states := map[string]*entityState{}
 	for k, v := range s.Checks {

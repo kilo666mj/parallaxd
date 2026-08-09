@@ -175,6 +175,23 @@ parallaxd_history_max_per_check: 10000
 # firewall requires deliberately adding their source address as well.
 parallaxd_operator_token: "{{ parallaxd_operator_token_secret | default('') }}"
 
+# Browser identity is provider-neutral. A bootstrap administrator is created
+# only when replicated state contains no users; keep its password in vaulted
+# group_vars. The legacy operator token remains available during migration.
+parallaxd_session_ttl: 12h
+parallaxd_bootstrap_admin: "{{ parallaxd_bootstrap_admin_name | default('') }}"
+parallaxd_bootstrap_password: "{{ parallaxd_bootstrap_admin_password | default('') }}"
+
+# Optional OpenID Connect. Local parallaxd users remain authoritative for
+# roles; the selected claim must exactly match a pre-provisioned username.
+parallaxd_oidc_issuer: ""
+parallaxd_oidc_client_id: ""
+parallaxd_oidc_client_secret: "{{ parallaxd_oidc_client_secret_secret | default('') }}"
+parallaxd_oidc_redirect_url: ""
+parallaxd_oidc_username_claim: email
+parallaxd_oidc_label: Single sign-on
+parallaxd_oidc_allow_unverified_email: false
+
 # Must exceed every corroborated check timeout. A hard-down target can consume
 # its entire probe timeout before returning a down vote, and the coordinator
 # still needs time to receive and verify the signed response. The coordinator

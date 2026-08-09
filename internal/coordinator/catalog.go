@@ -250,7 +250,7 @@ func (c *Coordinator) mutateMonitors(actor, action, subject string, monitors []M
 }
 
 func (c *Coordinator) handleMonitors(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	if _, ok := c.requirePermission(w, r, PermissionView); !ok {
 		return
 	}
 	writeJSON(w, c.monitorList())
@@ -269,7 +269,8 @@ func (c *Coordinator) handleMonitorOptions(w http.ResponseWriter, _ *http.Reques
 }
 
 func (c *Coordinator) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	var request struct {
@@ -290,7 +291,7 @@ func (c *Coordinator) handleCreateMonitor(w http.ResponseWriter, r *http.Request
 		}
 	}
 	monitors = append(monitors, request.Monitor)
-	if err := c.mutateMonitors(request.Actor, "create", request.Monitor.Name, monitors); err != nil {
+	if err := c.mutateMonitors(mutationActor(principal, request.Actor), "create", request.Monitor.Name, monitors); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -300,7 +301,8 @@ func (c *Coordinator) handleCreateMonitor(w http.ResponseWriter, r *http.Request
 }
 
 func (c *Coordinator) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	name := r.PathValue("name")
@@ -329,7 +331,7 @@ func (c *Coordinator) handleUpdateMonitor(w http.ResponseWriter, r *http.Request
 		http.Error(w, "monitor not found", http.StatusNotFound)
 		return
 	}
-	if err := c.mutateMonitors(request.Actor, "update", name, monitors); err != nil {
+	if err := c.mutateMonitors(mutationActor(principal, request.Actor), "update", name, monitors); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -337,7 +339,8 @@ func (c *Coordinator) handleUpdateMonitor(w http.ResponseWriter, r *http.Request
 }
 
 func (c *Coordinator) handleDeleteMonitor(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	var request struct {
@@ -361,7 +364,7 @@ func (c *Coordinator) handleDeleteMonitor(w http.ResponseWriter, r *http.Request
 		http.Error(w, "monitor not found", http.StatusNotFound)
 		return
 	}
-	if err := c.mutateMonitors(request.Actor, "delete", name, out); err != nil {
+	if err := c.mutateMonitors(mutationActor(principal, request.Actor), "delete", name, out); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -369,7 +372,7 @@ func (c *Coordinator) handleDeleteMonitor(w http.ResponseWriter, r *http.Request
 }
 
 func (c *Coordinator) handleValidateMonitor(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	if _, ok := c.requirePermission(w, r, PermissionOperate); !ok {
 		return
 	}
 	var request struct {
@@ -398,7 +401,7 @@ func (c *Coordinator) handleValidateMonitor(w http.ResponseWriter, r *http.Reque
 }
 
 func (c *Coordinator) handleTestMonitor(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	if _, ok := c.requirePermission(w, r, PermissionOperate); !ok {
 		return
 	}
 	var request struct {
@@ -463,14 +466,15 @@ func (c *Coordinator) monitorRevisionList() []MonitorRevision {
 }
 
 func (c *Coordinator) handleMonitorRevisions(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	if _, ok := c.requirePermission(w, r, PermissionView); !ok {
 		return
 	}
 	writeJSON(w, c.monitorRevisionList())
 }
 
 func (c *Coordinator) handleRollbackMonitors(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionRollback)
+	if !ok {
 		return
 	}
 	var request struct {
@@ -498,7 +502,7 @@ func (c *Coordinator) handleRollbackMonitors(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "revision not found", http.StatusNotFound)
 		return
 	}
-	if err := c.mutateMonitors(request.Actor, "rollback", fmt.Sprint(id), target); err != nil {
+	if err := c.mutateMonitors(mutationActor(principal, request.Actor), "rollback", fmt.Sprint(id), target); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

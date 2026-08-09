@@ -605,19 +605,86 @@ Automatic incident lifecycle is retained durably at `GET /v1/incidents`.
 Configured maintenance intervals suppress matching notifications while
 retaining a marked incident record at `GET /v1/maintenance`.
 
-An optional operator API adds human ownership without making the public status
-surface writable by accident. The dashboard accepts an operator name and token
-for the current browser tab, then exposes acknowledge, manual resolve, silence
-creation and silence cancellation controls alongside diagnostics. The token is
-kept in `sessionStorage`, is sent only in operator API requests, and is never
-embedded by the coordinator. Set `operator_token_file` to enable mutations;
-when unset, every mutation endpoint returns `503`. Mutations require
-`Authorization: Bearer ...` and record the actor and note in durable state:
+### Identity and authorization
 
-The token authenticates the operator but does not encrypt the connection. Use
-these mutations over loopback, an SSH tunnel, or another encrypted private
-transport; do not add the coordinator port to a public firewall allowlist and
-send the bearer token across the internet in cleartext.
+parallaxd owns authorization while allowing more than one authentication
+method. Local password accounts work in a standalone installation, OpenID
+Connect can delegate authentication to any conforming provider, and scoped API
+tokens cover automation. All three resolve to the same local role, so changing
+identity providers does not change who may operate the fleet.
+
+| Role | Capabilities |
+| --- | --- |
+| `viewer` | Read the monitor catalogue, revisions, fleet state, and history |
+| `operator` | Viewer access plus monitor changes, tests, silences, acknowledgements, and resolutions |
+| `admin` | Operator access plus user/token administration, catalogue rollback, and HA promotion |
+
+Passwords are stored as Argon2id hashes. Browser sessions use a Secure,
+HttpOnly, SameSite cookie and require a separate CSRF proof for every unsafe
+request. User, token, revocation, and session state is persisted with the
+coordinator and replicated to the standby; plaintext passwords and API token
+secrets are never persisted. A generated API token is shown exactly once.
+
+For a new installation, configure a bootstrap administrator using a secret
+file. It is created only if durable state has no users, so leaving this in the
+deployment configuration does not reset or recreate the account:
+
+```json
+"session_ttl": "12h",
+"bootstrap_admin": "admin@example.com",
+"bootstrap_password_file": "/etc/parallaxd/keys/bootstrap-password"
+```
+
+Local users and service tokens are managed in the dashboard's **Access** view
+or under `/v1/auth/users` and `/v1/auth/tokens`. The server refuses to disable,
+demote, or delete the last enabled local administrator. When OIDC is enabled,
+an account may omit a local password and operate as SSO-only.
+
+```
+GET    /v1/auth/me
+POST   /v1/auth/login
+POST   /v1/auth/logout
+POST   /v1/auth/password
+GET    /v1/auth/oidc/start
+GET    /v1/auth/oidc/callback
+GET    /v1/auth/users
+POST   /v1/auth/users
+PUT    /v1/auth/users/{username}
+DELETE /v1/auth/users/{username}
+GET    /v1/auth/tokens
+POST   /v1/auth/tokens
+DELETE /v1/auth/tokens/{id}
+```
+
+OIDC users are deliberately pre-provisioned: the configured claim must match a
+local username, and the local record supplies the role. Discovery, authorization
+code flow, PKCE, state, nonce, ID-token signature, issuer, audience, and expiry
+are all verified. An `email` identity must also carry `email_verified: true`;
+deployments that deliberately trust an issuer without that claim must opt into
+`allow_unverified_email`. `client_secret_file` is optional for public clients:
+
+```json
+"oidc": {
+  "issuer": "https://id.example.com/application/o/parallaxd/",
+  "client_id": "parallaxd",
+  "client_secret_file": "/etc/parallaxd/keys/oidc-client-secret",
+  "redirect_url": "https://status.example.com/v1/auth/oidc/callback",
+  "username_claim": "email",
+  "label": "Company sign-in"
+}
+```
+
+`operator_token_file` remains a migration and break-glass path. Its bearer
+credential has administrator privileges but no intrinsic identity, so legacy
+requests must still supply `actor`. The dashboard keeps a legacy token only in
+the current tab's `sessionStorage`; it is never embedded by the coordinator.
+When no users, scoped tokens, or legacy operator token exist, protected API
+endpoints return `503` rather than becoming writable by accident.
+
+No authentication method encrypts the connection. Use HTTPS, loopback, an SSH
+tunnel, or another encrypted private transport; never send a password, session,
+or bearer token over cleartext internet transport. Legacy requests remain
+compatible:
 
 ```sh
 curl -X POST http://127.0.0.1:8972/v1/incidents/7/acknowledge \
@@ -651,8 +718,8 @@ curl -X POST http://127.0.0.1:8972/v1/silences \
 ### Monitor management
 
 The dashboard's **Monitors** view is the live monitor catalogue. Catalogue and
-revision reads require the operator token because monitor definitions may hold
-sensitive HTTP headers. An operator
+revision reads require at least the viewer role because monitor definitions may
+hold sensitive HTTP headers. An operator
 can create, edit, clone, disable, or delete a monitor without redeploying the
 fleet. The editor validates the complete catalogue before activating a change,
 so it rejects unsatisfiable quorums, unknown probers, and changes that would
@@ -679,7 +746,7 @@ POST   /v1/monitors/revisions/{id}/rollback
 ```
 
 The initial catalogue comes from `checks` in the coordinator configuration.
-Once runtime state version 5 has been written, that durable catalogue is the
+Once runtime state version 5 or later has been written, that durable catalogue is the
 source of truth across restarts; changing the static `checks` list alone will
 not overwrite operator changes. Use the dashboard/API for subsequent monitor
 changes, or deliberately remove/migrate the state file during a controlled
