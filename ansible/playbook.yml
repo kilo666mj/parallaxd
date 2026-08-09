@@ -420,7 +420,7 @@
         - name: Render the parallaxd WireGuard candidate
           ansible.builtin.template:
             src: ha-wireguard.conf.j2
-            dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.candidate.conf"
+            dest: /etc/wireguard/parallaxd-cand.conf
             owner: root
             group: root
             mode: "0400"
@@ -431,13 +431,13 @@
           ansible.builtin.command:
             cmd: >-
               wg-quick strip
-              /etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.candidate.conf
+              /etc/wireguard/parallaxd-cand.conf
           changed_when: false
           no_log: true
 
         - name: Install the validated parallaxd WireGuard configuration
           ansible.builtin.copy:
-            src: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.candidate.conf"
+            src: /etc/wireguard/parallaxd-cand.conf
             dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
             remote_src: true
             owner: root
@@ -448,7 +448,7 @@
       always:
         - name: Remove the parallaxd WireGuard candidate
           ansible.builtin.file:
-            path: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.candidate.conf"
+            path: /etc/wireguard/parallaxd-cand.conf
             state: absent
           changed_when: false
           no_log: true
