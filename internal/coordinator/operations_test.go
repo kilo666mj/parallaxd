@@ -279,6 +279,11 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 			t.Errorf("dashboard does not contain %q", want)
 		}
 	}
+	for _, want := range []string{"incidents:i||[]", "silences:s||[]", "$('history').innerHTML"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard does not contain empty-collection guard %q", want)
+		}
+	}
 	if strings.Contains(body, cfg.OperatorToken) {
 		t.Fatal("dashboard embedded the configured operator token")
 	}
