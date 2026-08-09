@@ -99,7 +99,7 @@ func (c *Coordinator) baseAssignedTo(chk check.Check) (string, bool) {
 
 func (c *Coordinator) checksFor(prober string) []check.Check {
 	out := []check.Check{}
-	for _, chk := range c.checks {
+	for _, chk := range c.allChecks() {
 		if assigned, ok := c.assignedTo(chk); ok && assigned == prober {
 			out = append(out, chk)
 		}
@@ -116,7 +116,7 @@ func (c *Coordinator) Assignments() map[string][]string {
 	for _, p := range c.peers {
 		out[p.Name] = nil
 	}
-	for _, chk := range c.checks {
+	for _, chk := range c.allChecks() {
 		if name, ok := c.assignedTo(chk); ok {
 			out[name] = append(out[name], chk.Name)
 		}

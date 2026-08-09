@@ -11,21 +11,24 @@ import (
 )
 
 type persistedState struct {
-	Version        int                        `json:"version"`
-	Checks         map[string]persistedEntity `json:"checks"`
-	Components     map[string]persistedEntity `json:"components"`
-	LastScheduled  map[string]time.Time       `json:"last_scheduled"`
-	Silent         map[string]bool            `json:"silent"`
-	Incidents      []Incident                 `json:"incidents"`
-	NextIncidentID uint64                     `json:"next_incident_id"`
-	Silences       []Silence                  `json:"silences,omitempty"`
-	NextSilenceID  uint64                     `json:"next_silence_id,omitempty"`
-	Outbox         []Delivery                 `json:"outbox,omitempty"`
-	NextDeliveryID uint64                     `json:"next_delivery_id,omitempty"`
-	Escalated      map[string]time.Time       `json:"escalated,omitempty"`
-	Promoted       bool                       `json:"promoted,omitempty"`
-	PromotedAt     time.Time                  `json:"promoted_at,omitempty"`
-	PromotedBy     string                     `json:"promoted_by,omitempty"`
+	Version             int                        `json:"version"`
+	Checks              map[string]persistedEntity `json:"checks"`
+	Components          map[string]persistedEntity `json:"components"`
+	LastScheduled       map[string]time.Time       `json:"last_scheduled"`
+	Silent              map[string]bool            `json:"silent"`
+	Incidents           []Incident                 `json:"incidents"`
+	NextIncidentID      uint64                     `json:"next_incident_id"`
+	Silences            []Silence                  `json:"silences,omitempty"`
+	NextSilenceID       uint64                     `json:"next_silence_id,omitempty"`
+	Outbox              []Delivery                 `json:"outbox,omitempty"`
+	NextDeliveryID      uint64                     `json:"next_delivery_id,omitempty"`
+	Escalated           map[string]time.Time       `json:"escalated,omitempty"`
+	Promoted            bool                       `json:"promoted,omitempty"`
+	PromotedAt          time.Time                  `json:"promoted_at,omitempty"`
+	PromotedBy          string                     `json:"promoted_by,omitempty"`
+	Monitors            []MonitorSpec              `json:"monitors,omitempty"`
+	MonitorRevisions    []MonitorRevision          `json:"monitor_revisions,omitempty"`
+	NextMonitorRevision uint64                     `json:"next_monitor_revision,omitempty"`
 }
 type persistedEntity struct {
 	Status               check.Status           `json:"status"`
@@ -107,7 +110,7 @@ func (c *Coordinator) snapshot() persistedState {
 	for k, v := range c.componentStates {
 		components[k] = v
 	}
-	s := persistedState{Version: 4, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy}
+	s := persistedState{Version: 5, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy, Monitors: c.monitorList(), MonitorRevisions: append([]MonitorRevision(nil), c.monitorRevisions...), NextMonitorRevision: c.nextMonitorRevision}
 	for k, v := range c.lastScheduled {
 		s.LastScheduled[k] = v
 	}
@@ -151,16 +154,21 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version != 1 && s.Version != 2 && s.Version != 3 && s.Version != 4 {
+	if s.Version < 1 || s.Version > 5 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
 	return c.applyPersistedState(s, false)
 }
 
 func (c *Coordinator) applyPersistedState(s persistedState, replicated bool) error {
+	if s.Version >= 5 {
+		if err := c.replaceMonitorCatalog(s.Monitors); err != nil {
+			return fmt.Errorf("restore monitor catalogue: %w", err)
+		}
+	}
 	states := map[string]*entityState{}
 	for k, v := range s.Checks {
-		if _, ok := c.checks[k]; ok {
+		if _, ok := c.checkByName(k); ok {
 			states[k] = &entityState{status: v.Status, stale: v.Stale, since: v.Since, lastVerdict: v.LastVerdict,
 				suspectedSince: v.SuspectedSince, lastAttempt: v.LastAttempt, lastCorroboration: v.LastCorroboration,
 				inconclusiveAttempts: v.InconclusiveAttempts, lastInconclusive: v.LastInconclusive}
@@ -195,6 +203,10 @@ func (c *Coordinator) applyPersistedState(s persistedState, replicated bool) err
 	c.incidents, c.nextIncidentID = append([]Incident(nil), s.Incidents...), s.NextIncidentID
 	c.silences, c.nextSilenceID = append([]Silence(nil), s.Silences...), s.NextSilenceID
 	c.outbox, c.nextDeliveryID, c.escalated = outbox, s.NextDeliveryID, escalated
+	if s.Version >= 5 {
+		c.monitorRevisions = append([]MonitorRevision(nil), s.MonitorRevisions...)
+		c.nextMonitorRevision = s.NextMonitorRevision
+	}
 	c.mu.Unlock()
 	if !replicated && s.Promoted {
 		c.promoted.Store(true)

@@ -49,7 +49,7 @@ func (c *Coordinator) validateSilence(s Silence) error {
 		return errors.New("silence has an invalid interval")
 	}
 	for _, name := range s.Checks {
-		if _, ok := c.checks[name]; !ok {
+		if _, ok := c.checkByName(name); !ok {
 			return fmt.Errorf("unknown check %q", name)
 		}
 	}

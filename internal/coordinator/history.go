@@ -224,7 +224,7 @@ func (c *Coordinator) loadHistory() error {
 			continue
 		}
 		observation.ensureID()
-		if _, ok := c.checks[observation.Check]; !ok || observation.ReceivedAt.Before(c.now().UTC().Add(-c.historyRetention())) {
+		if !c.monitorKnown(observation.Check) || observation.ReceivedAt.Before(c.now().UTC().Add(-c.historyRetention())) {
 			dropped = true
 			continue
 		}
@@ -321,8 +321,10 @@ func (c *Coordinator) HistorySummaries() []HistorySummary {
 	now := c.now().UTC()
 	c.historyMu.Lock()
 	defer c.historyMu.Unlock()
-	out := make([]HistorySummary, 0, len(c.checks))
-	for name, chk := range c.checks {
+	checks := c.allChecks()
+	out := make([]HistorySummary, 0, len(checks))
+	for _, chk := range checks {
+		name := chk.Name
 		items := c.history[name]
 		summary := HistorySummary{Check: name, Kind: chk.Kind}
 		var latencies []int64
@@ -392,7 +394,7 @@ func (c *Coordinator) HistorySummaries() []HistorySummary {
 func (c *Coordinator) handleHistory(w http.ResponseWriter, r *http.Request) {
 	checkName := r.URL.Query().Get("check")
 	if checkName != "" {
-		if _, ok := c.checks[checkName]; !ok {
+		if !c.monitorKnown(checkName) {
 			http.Error(w, "unknown check", http.StatusBadRequest)
 			return
 		}

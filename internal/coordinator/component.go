@@ -107,7 +107,7 @@ func (c *Coordinator) members(comp check.Component) []Member {
 		if s, ok := status[name]; ok {
 			m.Status = string(s)
 		}
-		if chk, ok := c.checks[name]; ok {
+		if chk, ok := c.checkByName(name); ok {
 			m.Target = chk.Target
 		}
 		out = append(out, m)
