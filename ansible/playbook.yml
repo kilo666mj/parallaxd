@@ -415,15 +415,43 @@
              else parallaxd_standby_hosts[0] }}
       when: inventory_hostname in parallaxd_coordinator_nodes
 
-    - name: Deploy the parallaxd WireGuard interface
-      ansible.builtin.template:
-        src: ha-wireguard.conf.j2
-        dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
-        owner: root
-        group: root
-        mode: "0400"
-      no_log: true
-      notify: Restart parallaxd WireGuard
+    - name: Validate and install the parallaxd WireGuard interface
+      block:
+        - name: Render the parallaxd WireGuard candidate
+          ansible.builtin.template:
+            src: ha-wireguard.conf.j2
+            dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf.candidate"
+            owner: root
+            group: root
+            mode: "0400"
+          changed_when: false
+          no_log: true
+
+        - name: Validate the parallaxd WireGuard candidate
+          ansible.builtin.command:
+            cmd: >-
+              wg-quick strip
+              /etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf.candidate
+          changed_when: false
+          no_log: true
+
+        - name: Install the validated parallaxd WireGuard configuration
+          ansible.builtin.copy:
+            src: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf.candidate"
+            dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0400"
+          no_log: true
+          notify: Restart parallaxd WireGuard
+      always:
+        - name: Remove the parallaxd WireGuard candidate
+          ansible.builtin.file:
+            path: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf.candidate"
+            state: absent
+          changed_when: false
+          no_log: true
 
     - name: Allow the primary to initiate the HA tunnel
       ansible.posix.firewalld:
