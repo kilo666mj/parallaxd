@@ -28,7 +28,7 @@ func monitorRequest(t *testing.T, c *Coordinator, method, path string, body any)
 func testMonitor(name string) MonitorSpec {
 	return MonitorSpec{Name: name, Enabled: true, Kind: check.KindTCP, Target: "example.com:443",
 		Vantage: check.VantagePublic, Interval: "1m", Timeout: "10s",
-		Quorum: check.Quorum{Agree: 1, Of: 1}, Prober: "probe-a"}
+		Quorum: check.Quorum{Agree: 1, Of: 1}, Prober: "probe-a", Probers: []string{"probe-a"}}
 }
 
 func TestMonitorCRUDPersistsAndRollsBack(t *testing.T) {

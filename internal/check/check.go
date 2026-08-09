@@ -86,6 +86,11 @@ type Check struct {
 	// isolated owner.
 	Prober string `json:"prober,omitempty"`
 
+	// Probers limits ownership and corroboration to this eligible pool. Empty
+	// preserves the fleet-wide behavior. This is essential for private targets:
+	// a public prober cannot form an opinion about a service it cannot route to.
+	Probers []string `json:"probers,omitempty"`
+
 	// ExpectStatus, for HTTP, is the acceptable response code range. Empty
 	// means any 2xx.
 	ExpectStatus []int `json:"expect_status,omitempty"`
@@ -131,6 +136,17 @@ type Quorum struct {
 
 // Validate reports whether the check is usable.
 func (c Check) Validate() error {
+	eligible := make(map[string]bool, len(c.Probers))
+	for _, prober := range c.Probers {
+		prober = strings.TrimSpace(prober)
+		if prober == "" {
+			return fmt.Errorf("check %q: eligible prober names may not be empty", c.Name)
+		}
+		if eligible[prober] {
+			return fmt.Errorf("check %q: eligible prober %q is listed more than once", c.Name, prober)
+		}
+		eligible[prober] = true
+	}
 	switch {
 	case strings.TrimSpace(c.Name) == "":
 		return fmt.Errorf("check name is required")
@@ -162,6 +178,8 @@ func (c Check) Validate() error {
 		// and the check quietly stops being periodic.
 		return fmt.Errorf("check %q: timeout (%s) must be shorter than interval (%s)",
 			c.Name, c.Timeout, c.Interval)
+	case len(eligible) > 0 && c.Prober != "" && !eligible[c.Prober]:
+		return fmt.Errorf("check %q: preferred prober %q is not in its eligible prober pool", c.Name, c.Prober)
 	}
 	return c.Quorum.Validate(c.Name)
 }

@@ -65,7 +65,7 @@ func (c *Coordinator) assignedTo(chk check.Check) (string, bool) {
 	// stable hash over the healthy subset; when it rejoins, the preferred owner
 	// automatically resumes without reshuffling unrelated checks.
 	healthy := make([]Peer, 0, len(c.peers))
-	for _, p := range c.peers {
+	for _, p := range c.eligiblePeers(chk) {
 		if !unavailable[p.Name] {
 			healthy = append(healthy, p)
 		}
@@ -93,8 +93,25 @@ func (c *Coordinator) baseAssignedTo(chk check.Check) (string, bool) {
 	if chk.Prober != "" {
 		return chk.Prober, true
 	}
-	p, ok := assign(chk.Name, c.peers)
+	p, ok := assign(chk.Name, c.eligiblePeers(chk))
 	return p.Name, ok
+}
+
+func (c *Coordinator) eligiblePeers(chk check.Check) []Peer {
+	if len(chk.Probers) == 0 {
+		return c.peers
+	}
+	allowed := make(map[string]bool, len(chk.Probers))
+	for _, name := range chk.Probers {
+		allowed[name] = true
+	}
+	out := make([]Peer, 0, len(chk.Probers))
+	for _, peer := range c.peers {
+		if allowed[peer.Name] {
+			out = append(out, peer)
+		}
+	}
+	return out
 }
 
 func (c *Coordinator) checksFor(prober string) []check.Check {

@@ -953,3 +953,34 @@ func TestUnknownExplicitProberIsRejected(t *testing.T) {
 		t.Fatal("New accepted a check assigned to an unregistered prober")
 	}
 }
+
+func TestEligibleProberPoolScopesOwnershipAndCorroboration(t *testing.T) {
+	h := newHarness(t, 4, check.Quorum{Agree: 2, Of: 2}, nil)
+	chk := h.chk
+	chk.Prober = "probe-b"
+	chk.Probers = []string{"probe-b", "probe-d"}
+
+	if got, ok := h.coord.baseAssignedTo(chk); !ok || got != "probe-b" {
+		t.Fatalf("owner = %q, %v; want probe-b", got, ok)
+	}
+	peers := h.coord.corroborators(chk, check.Result{Prober: "probe-b", Provider: "probe-b"})
+	if len(peers) != 1 || peers[0].Name != "probe-d" {
+		t.Fatalf("corroborators = %+v, want only probe-d", peers)
+	}
+}
+
+func TestEligibleProberPoolIsValidatedAgainstFleet(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+	chk := h.chk
+	chk.Probers = []string{"probe-a", "probe-nowhere"}
+	if _, err := New(Config{Name: "coordinator", Key: h.coord.cfg.Key, Peers: h.coord.peers,
+		Checks: []check.Check{chk}, Logger: discardLogger()}); err == nil || !strings.Contains(err.Error(), "unregistered eligible prober") {
+		t.Fatalf("unknown eligible prober error = %v", err)
+	}
+
+	chk.Probers = []string{"probe-a", "probe-b"}
+	if _, err := New(Config{Name: "coordinator", Key: h.coord.cfg.Key, Peers: h.coord.peers,
+		Checks: []check.Check{chk}, Logger: discardLogger()}); err == nil || !strings.Contains(err.Error(), "asks 3 probers") {
+		t.Fatalf("undersized eligible pool error = %v", err)
+	}
+}
