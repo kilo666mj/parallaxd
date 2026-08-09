@@ -274,7 +274,7 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 		t.Errorf("X-Frame-Options=%q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Active incidents", "Create silence", "History", "/v1/history/summary", "/v1/diagnostics", "sessionStorage"} {
+	for _, want := range []string{"Active incidents", "Create silence", "History", "Monitors", "Test from all probers", "Monitor revisions", "/v1/history/summary", "/v1/diagnostics", "/v1/monitors", "sessionStorage"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard does not contain %q", want)
 		}

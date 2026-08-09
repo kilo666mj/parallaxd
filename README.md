@@ -609,7 +609,7 @@ An optional operator API adds human ownership without making the public status
 surface writable by accident. The dashboard accepts an operator name and token
 for the current browser tab, then exposes acknowledge, manual resolve, silence
 creation and silence cancellation controls alongside diagnostics. The token is
-kept in `sessionStorage`, is sent only in mutation requests, and is never
+kept in `sessionStorage`, is sent only in operator API requests, and is never
 embedded by the coordinator. Set `operator_token_file` to enable mutations;
 when unset, every mutation endpoint returns `503`. Mutations require
 `Authorization: Bearer ...` and record the actor and note in durable state:
@@ -647,6 +647,51 @@ curl -X POST http://127.0.0.1:8972/v1/silences \
   -d '{"name":"mail deploy","ends_at":"2030-01-02T03:04:05Z",\
        "checks":["mx-smtp"],"actor":"alice","comment":"change 1234"}'
 ```
+
+### Monitor management
+
+The dashboard's **Monitors** view is the live monitor catalogue. Catalogue and
+revision reads require the operator token because monitor definitions may hold
+sensitive HTTP headers. An operator
+can create, edit, clone, disable, or delete a monitor without redeploying the
+fleet. The editor validates the complete catalogue before activating a change,
+so it rejects unsatisfiable quorums, unknown probers, and changes that would
+leave a component referring to a disabled or missing monitor. **Test from all
+probers** performs real probes without changing status, history, or incidents.
+
+Every accepted change is persisted as a full-catalogue revision and replicated
+to the warm standby. The **Audit** view records the actor and action and can
+atomically roll the catalogue back to any retained revision. The coordinator
+keeps the latest 100 revisions. A rollback is itself a new auditable revision;
+it does not erase later history.
+
+The relevant API surface is:
+
+```
+GET    /v1/monitors
+POST   /v1/monitors
+PUT    /v1/monitors/{name}
+DELETE /v1/monitors/{name}
+POST   /v1/monitors/validate
+POST   /v1/monitors/test
+GET    /v1/monitors/revisions
+POST   /v1/monitors/revisions/{id}/rollback
+```
+
+The initial catalogue comes from `checks` in the coordinator configuration.
+Once runtime state version 5 has been written, that durable catalogue is the
+source of truth across restarts; changing the static `checks` list alone will
+not overwrite operator changes. Use the dashboard/API for subsequent monitor
+changes, or deliberately remove/migrate the state file during a controlled
+rebootstrap.
+
+For a coordinator bound to loopback, open the control room through a tunnel:
+
+```sh
+ssh -L 8972:127.0.0.1:8972 coordinator.example
+```
+
+Then browse to `http://127.0.0.1:8972/` and enter the operator name and token.
 
 `GET /v1/diagnostics` explains the current effective and preferred owner of
 every check, result-queue pressure, rejected-result counts by reason, and
