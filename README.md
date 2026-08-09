@@ -840,6 +840,15 @@ cp inventory.example inventory   # then edit
 ansible-playbook playbook.yml
 ```
 
+The playbook builds each binary once per distinct target architecture. Each
+binary is stamped from the newest commit touching its transitive project
+dependencies rather than the repository HEAD, and Go's repository-wide VCS
+stamp is disabled. Consequently an unrelated coordinator change leaves the
+prober artifact byte-for-byte identical; Ansible's checksum comparison skips
+its installation and does not notify the prober restart handler. A second
+deployment with no source or configuration changes performs no service
+restarts.
+
 Three groups: `parallaxd_coordinator` (exactly one host, and **not** also a
 prober — a host that is both means losing it costs a vantage as well as the
 decisions), `parallaxd_probers`, and an optional single-host
