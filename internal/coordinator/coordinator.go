@@ -170,7 +170,11 @@ type Coordinator struct {
 	peers  []Peer
 	byName map[string]Peer
 	checks map[string]check.Check
-	ring   *wire.Keyring
+	// checks and monitors are a copy-on-write live catalogue. checks contains
+	// only enabled monitors; monitors also retains disabled definitions.
+	checksMu sync.RWMutex
+	monitors map[string]MonitorSpec
+	ring     *wire.Keyring
 
 	log    *slog.Logger
 	client *http.Client
@@ -196,29 +200,31 @@ type Coordinator struct {
 	// starts, which is how a useful signal becomes one people mute.
 	startedAt time.Time
 
-	mu              sync.Mutex
-	states          map[string]*entityState
-	componentStates map[string]*entityState
-	lastScheduled   map[string]time.Time
-	incidents       []Incident
-	nextIncidentID  uint64
-	silences        []Silence
-	nextSilenceID   uint64
-	diagnostics     Diagnostics
-	destinations    map[string]Notifier
-	outbox          []Delivery
-	nextDeliveryID  uint64
-	escalated       map[string]time.Time
-	history         map[string][]Observation
-	historyAppends  int
-	promoted        atomic.Bool
-	promoteCh       chan struct{}
-	promoteOnce     sync.Once
-	promotedAt      time.Time
-	promotedBy      string
-	lastReplicaSync time.Time
-	primaryStateAt  time.Time
-	lastReplicaErr  string
+	mu                  sync.Mutex
+	states              map[string]*entityState
+	componentStates     map[string]*entityState
+	lastScheduled       map[string]time.Time
+	incidents           []Incident
+	nextIncidentID      uint64
+	silences            []Silence
+	nextSilenceID       uint64
+	diagnostics         Diagnostics
+	destinations        map[string]Notifier
+	outbox              []Delivery
+	nextDeliveryID      uint64
+	escalated           map[string]time.Time
+	history             map[string][]Observation
+	historyAppends      int
+	promoted            atomic.Bool
+	promoteCh           chan struct{}
+	promoteOnce         sync.Once
+	promotedAt          time.Time
+	promotedBy          string
+	lastReplicaSync     time.Time
+	primaryStateAt      time.Time
+	lastReplicaErr      string
+	monitorRevisions    []MonitorRevision
+	nextMonitorRevision uint64
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -236,6 +242,7 @@ type Coordinator struct {
 	deliveryMu sync.Mutex
 	historyMu  sync.Mutex
 	haMu       sync.Mutex
+	catalogMu  sync.Mutex
 }
 
 // entityState is what the coordinator remembers about one thing it reports on
@@ -454,7 +461,14 @@ func New(cfg Config) (*Coordinator, error) {
 		escalated:    map[string]time.Time{},
 		history:      map[string][]Observation{},
 		promoteCh:    make(chan struct{}),
+		monitors:     map[string]MonitorSpec{},
 	}
+	for _, chk := range cfg.Checks {
+		monitor := monitorFromCheck(chk)
+		coord.monitors[monitor.Name] = monitor
+	}
+	coord.nextMonitorRevision = 1
+	coord.monitorRevisions = []MonitorRevision{{ID: 1, At: coord.startedAt.UTC(), Actor: "configuration", Action: "baseline", Catalog: coord.monitorList()}}
 	for _, destination := range cfg.Destinations {
 		coord.destinations[destination.Name] = destination.Notifier
 	}
@@ -474,7 +488,7 @@ func New(cfg Config) (*Coordinator, error) {
 // coordinator's behaviour, and testing it directly is better than testing it
 // through a handler and a sleep.
 func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdict, error) {
-	chk, ok := c.checks[r.Check]
+	chk, ok := c.checkByName(r.Check)
 	if !ok {
 		return quorum.Verdict{}, fmt.Errorf("unknown check %q", r.Check)
 	}
@@ -872,6 +886,15 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/deliveries", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) })
 	mux.HandleFunc("GET /v1/history", c.handleHistory)
 	mux.HandleFunc("GET /v1/history/summary", c.handleHistorySummary)
+	mux.HandleFunc("GET /v1/monitors", c.handleMonitors)
+	mux.HandleFunc("GET /v1/monitor-options", c.handleMonitorOptions)
+	mux.HandleFunc("POST /v1/monitors", c.handleCreateMonitor)
+	mux.HandleFunc("PUT /v1/monitors/{name}", c.handleUpdateMonitor)
+	mux.HandleFunc("DELETE /v1/monitors/{name}", c.handleDeleteMonitor)
+	mux.HandleFunc("POST /v1/monitors/validate", c.handleValidateMonitor)
+	mux.HandleFunc("POST /v1/monitors/test", c.handleTestMonitor)
+	mux.HandleFunc("GET /v1/monitors/revisions", c.handleMonitorRevisions)
+	mux.HandleFunc("POST /v1/monitors/revisions/{id}/rollback", c.handleRollbackMonitors)
 	mux.HandleFunc("GET /v1/replica", c.handleReplica)
 	mux.HandleFunc("GET /v1/ha", c.handleHAStatus)
 	mux.HandleFunc("POST /v1/ha/promote", c.handlePromote)
@@ -903,7 +926,8 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "result rejected", http.StatusForbidden)
 		return
 	}
-	if _, known := c.checks[payload.Result.Check]; !known {
+	chk, known := c.checkByName(payload.Result.Check)
+	if !known {
 		c.recordRejectedResult("unknown_check")
 		// A registered prober reporting a check the coordinator does not have
 		// is a configuration drift, not an attack — but acting on it would
@@ -918,7 +942,6 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request-bound result is not a scheduled result", http.StatusBadRequest)
 		return
 	}
-	chk := c.checks[payload.Result.Check]
 	assigned, ok := c.assignedTo(chk)
 	preferred, _ := c.baseAssignedTo(chk)
 	returning := preferred == payload.Result.Prober && c.isSilent(payload.Result.Prober)
@@ -988,7 +1011,7 @@ func (c *Coordinator) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"coordinator": c.cfg.Name,
 		"status":      status,
 		"probers":     len(c.peers),
-		"checks":      len(c.checks),
+		"checks":      len(c.allChecks()),
 	})
 }
 
@@ -1020,8 +1043,9 @@ type StatusEntry struct {
 
 // Status reports the current state of every check.
 func (c *Coordinator) Status() []StatusEntry {
-	out := make([]StatusEntry, 0, len(c.checks))
-	for _, chk := range c.checks {
+	checks := c.allChecks()
+	out := make([]StatusEntry, 0, len(checks))
+	for _, chk := range checks {
 		e := StatusEntry{Check: chk.Name, Target: chk.Target, Status: string(check.StatusUnknown)}
 		if name, ok := c.assignedTo(chk); ok {
 			e.AssignedTo = name
