@@ -50,50 +50,68 @@
         - "{{ parallaxd_config_dir }}"
         - "{{ parallaxd_key_dir }}"
 
-    - name: Describe the checkout for the version stamp
-      ansible.builtin.command:
-        cmd: git describe --tags --always --dirty
-        chdir: "{{ playbook_dir }}/.."
-      delegate_to: localhost
-      become: false
-      changed_when: false
-      # Runs in check mode too. It only reads the local checkout, and without
-      # it a --check run has no version to stamp and the build below has
-      # nothing to name.
-      check_mode: false
-      register: parallaxd_git_describe
-      failed_when: false
-
     - name: Resolve the target architecture
       ansible.builtin.set_fact:
         parallaxd_goarch: >-
           {{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64',
               'armv7l': 'arm', 'armv6l': 'arm'}.get(
               ansible_facts['architecture'], ansible_facts['architecture']) }}
-        parallaxd_version: "{{ parallaxd_git_describe.stdout | default('dev', true) | trim }}"
 
-    # Built with -ldflags so a deployed host reports which build it is running.
-    # Without it the binary keeps main.version's "dev" default and `-version`
-    # on a host tells you nothing — a mistake already made twice on this fleet.
-    - name: Build the binaries locally
+    - name: Resolve the distinct build architectures
+      ansible.builtin.set_fact:
+        parallaxd_build_architectures: >-
+          {{ groups['parallaxd']
+             | map('extract', hostvars, 'parallaxd_goarch')
+             | unique | list }}
+      run_once: true
+
+    - name: Resolve each component source version
       ansible.builtin.command:
-        cmd: >-
-          go build -trimpath
-          -ldflags "-s -w -X main.version={{ parallaxd_version }}"
-          -o {{ playbook_dir }}/../parallaxd-{{ item }}-linux-{{ parallaxd_goarch }}
-          ./cmd/{{ item }}
+        cmd: "{{ playbook_dir }}/scripts/component-version.sh {{ item }}"
         chdir: "{{ playbook_dir }}/.."
-      environment:
-        CGO_ENABLED: "0"
-        GOOS: linux
-        GOARCH: "{{ parallaxd_goarch }}"
       loop:
         - parallaxd
         - parallaxd-probe
         - parallaxd-watch
+      loop_control:
+        label: "{{ item }}"
       delegate_to: localhost
       become: false
-      changed_when: true
+      changed_when: false
+      run_once: true
+      check_mode: false
+      register: parallaxd_component_versions
+
+    # Build each component/architecture pair once. Component-specific versions
+    # and -buildvcs=false make an unaffected binary byte-for-byte stable across
+    # unrelated repository commits, so copy's checksum comparison only schedules
+    # restarts for services whose transitive project sources actually changed.
+    - name: Build each binary and architecture once locally
+      ansible.builtin.command:
+        cmd: >-
+          go build -buildvcs=false -trimpath
+          -ldflags "-s -w -X main.version={{
+            (parallaxd_component_versions.results
+             | selectattr('item', 'equalto', item.0)
+             | map(attribute='stdout') | first | trim) }}"
+          -o {{ playbook_dir }}/../parallaxd-{{ item.0 }}-linux-{{ item.1 }}
+          ./cmd/{{ item.0 }}
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        CGO_ENABLED: "0"
+        GOOS: linux
+        GOARCH: "{{ item.1 }}"
+      loop: >-
+        {{ ['parallaxd', 'parallaxd-probe', 'parallaxd-watch']
+           | product(parallaxd_build_architectures) | list }}
+      loop_control:
+        label: "{{ item.0 }} / linux-{{ item.1 }}"
+      delegate_to: localhost
+      become: false
+      # Compiling the local staging artifacts is preparatory work. The remote
+      # copy tasks below report whether deployment state actually changed.
+      changed_when: false
+      run_once: true
       # Runs in check mode too: it is a local compile with no effect on any
       # host, and skipping it makes --check fail at the copy tasks with a
       # missing-file error rather than telling you what would change. A dry
