@@ -879,6 +879,13 @@ The primary's operator token is copied to the standby through the same
 protected path so promotion remains authenticated even when that secret was
 originally scoped only to the primary host.
 
+Private agents may additionally join `parallaxd_internal_probers`. Give each a
+unique `10.77.0.x` `parallaxd_address`; the play extends its dedicated
+`wg-parallaxd` interface to both coordinators while leaving every pre-existing
+WireGuard interface untouched. NATed agents initiate both encrypted paths, so
+the private site exposes no inbound probe port. Put a restrictive
+`parallaxd_allow_targets` list in each private host's gitignored `host_vars`.
+
 **Size the fleet by provider, not by host.** Three probers behind Hetzner are
 one opinion held three times, and `distinct_providers` exists to refuse exactly
 that. Three probers is the floor — isolation requires having failed to reach at
@@ -896,10 +903,11 @@ to a separate standby-only file with secret-bearing tasks marked `no_log`.
 When a standby is present, define a random 32-character-or-longer
 `parallaxd_replication_token_secret` in the gitignored
 `ansible/group_vars/all.yml`. The playbook creates a dedicated
-`wg-parallaxd` point-to-point WireGuard interface between primary and standby;
-replication uses that encrypted address and the public coordinator firewall
-admits replica traffic only from the tunnel. Existing VPN interfaces are not
-modified.
+`wg-parallaxd` WireGuard interface between primary and standby; replication
+uses that encrypted address and the public coordinator firewall admits replica
+traffic only from the tunnel. When internal probers are configured, the same
+project-owned interface carries their control traffic. Existing VPN interfaces
+are not modified.
 
 The play runs in three passes because the configs are mutually dependent — the
 coordinator lists every prober's public key and each prober names the

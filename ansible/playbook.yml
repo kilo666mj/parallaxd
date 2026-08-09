@@ -23,12 +23,14 @@
       ansible.builtin.package:
         name: firewalld
         state: present
+      when: parallaxd_manage_firewalld
 
     - name: Enable and start firewalld
       ansible.builtin.systemd:
         name: firewalld
         enabled: true
         state: started
+      when: parallaxd_manage_firewalld
 
     - name: Create the service account
       ansible.builtin.user:
@@ -317,73 +319,11 @@
 # ---------------------------------------------------------------------------
 
 - name: Configure probers
-  hosts: parallaxd_probers
+  hosts: parallaxd_probers:!parallaxd_internal_probers
   become: true
   tasks:
-    - name: Read the coordinator public key for the prober
-      ansible.builtin.slurp:
-        src: "{{ parallaxd_key_dir }}/public"
-      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
-      register: parallaxd_probe_coordinator_key_raw
-
-    - name: Record the coordinator public key for the prober
-      ansible.builtin.set_fact:
-        parallaxd_coordinator_public_key_runtime: >-
-          {{ parallaxd_probe_coordinator_key_raw.content | b64decode | trim }}
-
-    - name: Fail when the prober has no provider
-      ansible.builtin.assert:
-        that: parallaxd_provider is defined and parallaxd_provider | length > 0
-        fail_msg: >-
-          {{ inventory_hostname }} has no parallaxd_provider. Quorum uses it to
-          tell three opinions from one opinion held three times; probers with no
-          provider collapse into a single group, so a distinct-providers rule
-          could never be satisfied. Set it in the inventory.
-
-    - name: Deploy the prober configuration
-      ansible.builtin.template:
-        src: probe.json.j2
-        dest: "{{ parallaxd_config_dir }}/probe.json"
-        owner: root
-        group: "{{ parallaxd_group }}"
-        mode: "0640"
-      notify: Restart prober
-
-    - name: Deploy the prober unit
-      ansible.builtin.template:
-        src: parallaxd-probe.service.j2
-        dest: /etc/systemd/system/parallaxd-probe.service
-        mode: "0644"
-      notify: Restart prober
-
-    - name: Schedule prober restart after binary update
-      ansible.builtin.debug:
-        msg: Prober binary changed; restart after configuration is complete.
-      changed_when: parallaxd_prober_binary_install.changed | default(false)
-      notify: Restart prober
-
-    # The control port is reachable only from the coordinator and the other
-    # probers. Everything else is dropped, which is what replaces transport
-    # encryption here.
-    - name: Allow the coordinator and peers to reach this prober
-      ansible.posix.firewalld:
-        rich_rule: >-
-          rule family="ipv4"
-          source address="{{ item }}"
-          port port="{{ parallaxd_prober_port }}" protocol="tcp"
-          accept
-        zone: public
-        permanent: true
-        immediate: true
-        state: enabled
-      loop: "{{ parallaxd_prober_allow_sources }}"
-
-    - name: Enable and start the prober
-      ansible.builtin.systemd:
-        name: parallaxd-probe
-        enabled: true
-        state: started
-        daemon_reload: true
+    - name: Configure a public prober
+      ansible.builtin.include_tasks: tasks/configure-prober.yml
 
   handlers:
     - name: Restart prober
@@ -394,8 +334,8 @@
 
 # ---------------------------------------------------------------------------
 
-- name: Configure the encrypted HA replication link
-  hosts: parallaxd_coordinator:parallaxd_standby
+- name: Configure the encrypted coordinator and internal-prober network
+  hosts: parallaxd_coordinator:parallaxd_standby:parallaxd_internal_probers
   become: true
   pre_tasks:
     - name: Skip HA setup when no standby is configured
@@ -419,7 +359,21 @@
         name: wireguard-tools
         state: present
 
-    - name: Generate the dedicated HA WireGuard keypair
+    - name: Require tunnel addresses for internal probers
+      ansible.builtin.assert:
+        that:
+          - parallaxd_address is match('^10\\.77\\.0\\.[0-9]+$')
+          - parallaxd_address not in [parallaxd_ha_primary_address, parallaxd_ha_standby_address]
+          - >-
+            (parallaxd_internal_prober_hosts
+             | map('extract', hostvars, 'parallaxd_address') | unique | list | length)
+            == (parallaxd_internal_prober_hosts | length)
+        fail_msg: >-
+          {{ inventory_hostname }} needs a unique IP in parallaxd_address for
+          the wg-parallaxd overlay.
+      when: inventory_hostname in parallaxd_internal_prober_hosts
+
+    - name: Generate the dedicated parallaxd WireGuard keypair
       ansible.builtin.shell:
         cmd: >-
           set -o pipefail;
@@ -430,32 +384,38 @@
         creates: "{{ parallaxd_key_dir }}/ha-wg-private"
       no_log: true
 
-    - name: Secure the HA WireGuard private key
+    - name: Secure the parallaxd WireGuard private key
       ansible.builtin.file:
         path: "{{ parallaxd_key_dir }}/ha-wg-private"
         owner: root
         group: root
         mode: "0400"
 
-    - name: Read this host's HA WireGuard private key
+    - name: Read this host's parallaxd WireGuard private key
       ansible.builtin.slurp:
         src: "{{ parallaxd_key_dir }}/ha-wg-private"
       register: parallaxd_ha_wireguard_private_raw
       no_log: true
 
-    - name: Read the primary HA WireGuard public key
+    - name: Read this host's parallaxd WireGuard public key
       ansible.builtin.slurp:
         src: "{{ parallaxd_key_dir }}/ha-wg-public"
-      delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
-      register: parallaxd_ha_primary_public_raw
+      register: parallaxd_ha_wireguard_public_raw
 
-    - name: Read the standby HA WireGuard public key
-      ansible.builtin.slurp:
-        src: "{{ parallaxd_key_dir }}/ha-wg-public"
-      delegate_to: "{{ parallaxd_standby_hosts[0] }}"
-      register: parallaxd_ha_standby_public_raw
+    - name: Record this host's parallaxd WireGuard public key
+      ansible.builtin.set_fact:
+        parallaxd_ha_wireguard_public_key: >-
+          {{ parallaxd_ha_wireguard_public_raw.content | b64decode | trim }}
 
-    - name: Deploy the HA WireGuard interface
+    - name: Resolve the other coordinator
+      ansible.builtin.set_fact:
+        parallaxd_ha_other_coordinator: >-
+          {{ groups['parallaxd_coordinator'][0]
+             if inventory_hostname in parallaxd_standby_hosts
+             else parallaxd_standby_hosts[0] }}
+      when: inventory_hostname in parallaxd_coordinator_nodes
+
+    - name: Deploy the parallaxd WireGuard interface
       ansible.builtin.template:
         src: ha-wireguard.conf.j2
         dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
@@ -463,7 +423,7 @@
         group: root
         mode: "0400"
       no_log: true
-      notify: Restart HA WireGuard
+      notify: Restart parallaxd WireGuard
 
     - name: Allow the primary to initiate the HA tunnel
       ansible.posix.firewalld:
@@ -478,27 +438,98 @@
         state: enabled
       when: inventory_hostname in parallaxd_standby_hosts
 
-    - name: Enable and start the HA WireGuard interface
+    # WireGuard authenticates every packet before exposing it to the host. An
+    # unrestricted UDP listener is therefore safe and lets NATed internal
+    # agents initiate without a brittle home-IP allowlist.
+    - name: Allow internal probers to initiate encrypted tunnels
+      ansible.posix.firewalld:
+        port: "{{ parallaxd_ha_wireguard_port }}/udp"
+        zone: public
+        permanent: true
+        immediate: true
+        state: enabled
+      when:
+        - inventory_hostname in parallaxd_coordinator_nodes
+        - parallaxd_internal_prober_hosts | length > 0
+
+    - name: Enable forwarding through the primary internal-prober hub
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        sysctl_set: true
+        reload: true
+      when:
+        - inventory_hostname == groups['parallaxd_coordinator'][0]
+        - parallaxd_internal_prober_hosts | length > 0
+
+    - name: Enable and start the parallaxd WireGuard interface
       ansible.builtin.systemd:
         name: "wg-quick@{{ parallaxd_ha_wireguard_interface }}"
         enabled: true
         state: started
         daemon_reload: true
 
-    - name: Apply HA WireGuard changes before coordinator configuration
+    - name: Apply parallaxd WireGuard changes before service configuration
       ansible.builtin.meta: flush_handlers
 
-    - name: Verify the encrypted HA peer is reachable
+    - name: Trust the primary parallaxd interface for peer forwarding
+      ansible.posix.firewalld:
+        interface: "{{ parallaxd_ha_wireguard_interface }}"
+        zone: trusted
+        permanent: true
+        immediate: true
+        state: enabled
+      when:
+        - inventory_hostname == groups['parallaxd_coordinator'][0]
+        - parallaxd_internal_prober_hosts | length > 0
+
+    - name: Resolve encrypted peers that must be reachable
+      ansible.builtin.set_fact:
+        parallaxd_wireguard_ping_targets: >-
+          {{ ([parallaxd_ha_primary_address]
+              if inventory_hostname in parallaxd_standby_hosts
+              else ([parallaxd_ha_standby_address]
+                    if inventory_hostname in groups['parallaxd_coordinator']
+                    else [parallaxd_ha_primary_address, parallaxd_ha_standby_address]))
+             + ((parallaxd_internal_prober_hosts
+                 | reject('equalto', inventory_hostname)
+                 | map('extract', hostvars, 'parallaxd_address') | list)
+                if inventory_hostname in parallaxd_internal_prober_hosts
+                or inventory_hostname == groups['parallaxd_coordinator'][0]
+                else []) }}
+
+    - name: Verify encrypted peers are reachable
       ansible.builtin.command:
-        cmd: >-
-          ping -c 2 -W 3
-          {{ parallaxd_ha_primary_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_standby_address }}
+        cmd: "ping -c 2 -W 3 {{ item }}"
+      loop: "{{ parallaxd_wireguard_ping_targets }}"
       changed_when: false
+      register: parallaxd_wireguard_ping
+      retries: 5
+      delay: 3
+      until: parallaxd_wireguard_ping.rc == 0
 
   handlers:
-    - name: Restart HA WireGuard
+    - name: Restart parallaxd WireGuard
       ansible.builtin.systemd:
         name: "wg-quick@{{ parallaxd_ha_wireguard_interface }}"
+        state: restarted
+        daemon_reload: true
+
+# The tunnel is deliberately configured before these agents start. Otherwise
+# their coordinator URL points at an interface that does not exist yet and a
+# successful Ansible run briefly deploys a known-unreachable monitoring node.
+- name: Configure internal probers
+  hosts: parallaxd_internal_probers
+  become: true
+  tasks:
+    - name: Configure an internal prober
+      ansible.builtin.include_tasks: tasks/configure-prober.yml
+
+  handlers:
+    - name: Restart prober
+      ansible.builtin.systemd:
+        name: parallaxd-probe
         state: restarted
         daemon_reload: true
 

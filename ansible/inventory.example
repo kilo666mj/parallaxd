@@ -39,6 +39,18 @@ probe-a  parallaxd_address=198.51.100.11  parallaxd_provider=provider-one
 probe-b  parallaxd_address=198.51.100.12  parallaxd_provider=provider-two
 probe-c  parallaxd_address=198.51.100.13  parallaxd_provider=provider-three
 probe-d  parallaxd_address=198.51.100.14  parallaxd_provider=provider-four
+# internal-a  parallaxd_address=10.77.0.11  parallaxd_provider=site-one
+# internal-b  parallaxd_address=10.77.0.12  parallaxd_provider=site-one
+# internal-c  parallaxd_address=10.77.0.13  parallaxd_provider=site-one
+
+# Private agents must also be listed in parallaxd_probers above. Their
+# parallaxd_address is a unique address on wg-parallaxd; Ansible reaches them
+# through their ordinary SSH aliases. Existing WireGuard interfaces on a host
+# are not modified.
+[parallaxd_internal_probers]
+# internal-a  parallaxd_address=10.77.0.11  parallaxd_provider=site-one
+# internal-b  parallaxd_address=10.77.0.12  parallaxd_provider=site-one
+# internal-c  parallaxd_address=10.77.0.13  parallaxd_provider=site-one
 
 # [parallaxd_watch] — the far end of the dead-man's switch. A different host
 # from the coordinator, and preferably a different provider: on the same host

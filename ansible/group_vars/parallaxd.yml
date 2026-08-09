@@ -5,6 +5,7 @@ parallaxd_user: parallaxd
 parallaxd_group: parallaxd
 parallaxd_config_dir: /etc/parallaxd
 parallaxd_key_dir: "{{ parallaxd_config_dir }}/keys"
+parallaxd_manage_firewalld: true
 
 # Ports. The control API is reachable only from the addresses in the allowlist
 # below; there is no other listener.
@@ -29,7 +30,6 @@ parallaxd_address: "{{ ansible_host | default(inventory_hostname) }}"
 
 # The coordinator's address as probers reach it.
 parallaxd_coordinator_host: "{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}"
-parallaxd_coordinator_url: "http://{{ parallaxd_coordinator_host }}:{{ parallaxd_coordinator_port }}"
 
 # Optional warm standby. The replication link has its own WireGuard interface
 # so it does not modify or depend on any host's existing VPN configuration.
@@ -37,6 +37,7 @@ parallaxd_standby_hosts: "{{ groups['parallaxd_standby'] | default([]) }}"
 parallaxd_coordinator_nodes: >-
   {{ (groups['parallaxd_coordinator'] | default([]))
      + parallaxd_standby_hosts }}
+parallaxd_internal_prober_hosts: "{{ groups['parallaxd_internal_probers'] | default([]) }}"
 parallaxd_ha_replication_token: "{{ parallaxd_replication_token_secret | default('') }}"
 parallaxd_ha_replication_interval: 30s
 parallaxd_ha_replication_timeout: 2m
@@ -45,6 +46,10 @@ parallaxd_ha_wireguard_port: 51821
 parallaxd_ha_primary_address: 10.77.0.1
 parallaxd_ha_standby_address: 10.77.0.2
 parallaxd_ha_primary_url: "http://{{ parallaxd_ha_primary_address }}:{{ parallaxd_coordinator_port }}"
+parallaxd_coordinator_url: >-
+  {{ ('http://' + parallaxd_ha_primary_address + ':' + parallaxd_coordinator_port|string)
+     if inventory_hostname in parallaxd_internal_prober_hosts
+     else ('http://' + parallaxd_coordinator_host + ':' + parallaxd_coordinator_port|string) }}
 parallaxd_coordinator_key_file: >-
   {{ parallaxd_key_dir + ('/coordinator-private'
      if inventory_hostname in parallaxd_standby_hosts else '/private') }}
@@ -79,10 +84,12 @@ parallaxd_coordinator_key_file: >-
 # coordinator group RAW with the mapped probers and handed firewalld a
 # hostname. Group the concatenation before piping it.
 parallaxd_prober_allow_sources: >-
-  {{ ((groups['parallaxd_coordinator'] | default([]))
-      + (groups['parallaxd_probers'] | default([])))
-     | map('extract', hostvars, 'parallaxd_address')
-     | list }}
+  {{ (([parallaxd_ha_primary_address, parallaxd_ha_standby_address]
+       if inventory_hostname in parallaxd_internal_prober_hosts
+       else (groups['parallaxd_coordinator'] | default([])
+             | map('extract', hostvars, 'parallaxd_address') | list))
+      + (groups['parallaxd_probers'] | default([])
+         | map('extract', hostvars, 'parallaxd_address') | list)) | unique | list }}
 
 # Sources permitted to reach the coordinator's port: every prober.
 parallaxd_coordinator_allow_sources: >-

@@ -1,0 +1,66 @@
+---
+- name: Read the coordinator public key for the prober
+  ansible.builtin.slurp:
+    src: "{{ parallaxd_key_dir }}/public"
+  delegate_to: "{{ groups['parallaxd_coordinator'][0] }}"
+  register: parallaxd_probe_coordinator_key_raw
+
+- name: Record the coordinator public key for the prober
+  ansible.builtin.set_fact:
+    parallaxd_coordinator_public_key_runtime: >-
+      {{ parallaxd_probe_coordinator_key_raw.content | b64decode | trim }}
+
+- name: Fail when the prober has no provider
+  ansible.builtin.assert:
+    that: parallaxd_provider is defined and parallaxd_provider | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }} has no parallaxd_provider. Quorum uses it to
+      tell three opinions from one opinion held three times; probers with no
+      provider collapse into a single group, so a distinct-providers rule
+      could never be satisfied. Set it in the inventory.
+
+- name: Deploy the prober configuration
+  ansible.builtin.template:
+    src: probe.json.j2
+    dest: "{{ parallaxd_config_dir }}/probe.json"
+    owner: root
+    group: "{{ parallaxd_group }}"
+    mode: "0640"
+  notify: Restart prober
+
+- name: Deploy the prober unit
+  ansible.builtin.template:
+    src: parallaxd-probe.service.j2
+    dest: /etc/systemd/system/parallaxd-probe.service
+    mode: "0644"
+  notify: Restart prober
+
+- name: Schedule prober restart after binary update
+  ansible.builtin.debug:
+    msg: Prober binary changed; restart after configuration is complete.
+  changed_when: parallaxd_prober_binary_install.changed | default(false)
+  notify: Restart prober
+
+# The control port is reachable only from the coordinator and the other
+# probers. Everything else is dropped, which is what replaces transport
+# encryption here.
+- name: Allow the coordinator and peers to reach this prober
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family="ipv4"
+      source address="{{ item }}"
+      port port="{{ parallaxd_prober_port }}" protocol="tcp"
+      accept
+    zone: public
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ parallaxd_prober_allow_sources }}"
+  when: parallaxd_manage_firewalld
+
+- name: Enable and start the prober
+  ansible.builtin.systemd:
+    name: parallaxd-probe
+    enabled: true
+    state: started
+    daemon_reload: true
