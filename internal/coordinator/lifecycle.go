@@ -192,7 +192,9 @@ func (c *Coordinator) ResolveIncident(id uint64, actor, note string) error {
 func (c *Coordinator) Silences() []Silence {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := append([]Silence(nil), c.silences...)
+	// Collection endpoints consistently encode an empty result as [] rather
+	// than null so clients can iterate without special cases.
+	out := append([]Silence{}, c.silences...)
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out
 }
