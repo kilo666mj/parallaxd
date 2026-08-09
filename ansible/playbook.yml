@@ -501,7 +501,7 @@
     - name: Apply parallaxd WireGuard changes before service configuration
       ansible.builtin.meta: flush_handlers
 
-    - name: Trust the primary parallaxd interface for peer forwarding
+    - name: Trust authenticated parallaxd tunnel traffic
       ansible.posix.firewalld:
         interface: "{{ parallaxd_ha_wireguard_interface }}"
         zone: trusted
@@ -509,7 +509,10 @@
         immediate: true
         state: enabled
       when:
-        - inventory_hostname == groups['parallaxd_coordinator'][0]
+        - >-
+          inventory_hostname == groups['parallaxd_coordinator'][0]
+          or inventory_hostname in parallaxd_internal_prober_hosts
+        - parallaxd_manage_firewalld
         - parallaxd_internal_prober_hosts | length > 0
 
     - name: Resolve encrypted peers that must be reachable
