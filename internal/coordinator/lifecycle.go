@@ -1,7 +1,6 @@
 package coordinator
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -249,21 +248,6 @@ func (c *Coordinator) CancelSilence(id uint64, actor, note string) error {
 	return errSilenceNotFound
 }
 
-func (c *Coordinator) requireOperator(w http.ResponseWriter, r *http.Request) bool {
-	if c.cfg.OperatorToken == "" {
-		http.Error(w, "operator API is disabled", http.StatusServiceUnavailable)
-		return false
-	}
-	provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	expected := c.cfg.OperatorToken
-	if len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "operator authorization required", http.StatusUnauthorized)
-		return false
-	}
-	return true
-}
-
 func decodeOperatorJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes))
 	decoder.DisallowUnknownFields()
@@ -300,7 +284,8 @@ func writeMutationError(w http.ResponseWriter, err error) {
 }
 
 func (c *Coordinator) handleAcknowledgeIncident(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	id, err := incidentID(r)
@@ -313,7 +298,7 @@ func (c *Coordinator) handleAcknowledgeIncident(w http.ResponseWriter, r *http.R
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
-	if err := c.AcknowledgeIncident(id, body.Actor, body.Note); err != nil {
+	if err := c.AcknowledgeIncident(id, mutationActor(principal, body.Actor), body.Note); err != nil {
 		writeMutationError(w, err)
 		return
 	}
@@ -321,7 +306,8 @@ func (c *Coordinator) handleAcknowledgeIncident(w http.ResponseWriter, r *http.R
 }
 
 func (c *Coordinator) handleResolveIncident(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	id, err := incidentID(r)
@@ -334,7 +320,7 @@ func (c *Coordinator) handleResolveIncident(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
-	if err := c.ResolveIncident(id, body.Actor, body.Note); err != nil {
+	if err := c.ResolveIncident(id, mutationActor(principal, body.Actor), body.Note); err != nil {
 		writeMutationError(w, err)
 		return
 	}
@@ -357,7 +343,8 @@ type createSilenceRequest struct {
 }
 
 func (c *Coordinator) handleCreateSilence(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	var body createSilenceRequest
@@ -365,7 +352,7 @@ func (c *Coordinator) handleCreateSilence(w http.ResponseWriter, r *http.Request
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
-	silence, err := c.CreateSilence(Silence{Name: body.Name, StartsAt: body.StartsAt, EndsAt: body.EndsAt, Checks: body.Checks, Components: body.Components, Probers: body.Probers, CreatedBy: body.Actor, Comment: body.Comment})
+	silence, err := c.CreateSilence(Silence{Name: body.Name, StartsAt: body.StartsAt, EndsAt: body.EndsAt, Checks: body.Checks, Components: body.Components, Probers: body.Probers, CreatedBy: mutationActor(principal, body.Actor), Comment: body.Comment})
 	if err != nil {
 		writeMutationError(w, err)
 		return
@@ -376,7 +363,8 @@ func (c *Coordinator) handleCreateSilence(w http.ResponseWriter, r *http.Request
 }
 
 func (c *Coordinator) handleDeleteSilence(w http.ResponseWriter, r *http.Request) {
-	if !c.requireOperator(w, r) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
 		return
 	}
 	id, err := incidentID(r)
@@ -389,7 +377,7 @@ func (c *Coordinator) handleDeleteSilence(w http.ResponseWriter, r *http.Request
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
-	if err := c.CancelSilence(id, body.Actor, body.Note); err != nil {
+	if err := c.CancelSilence(id, mutationActor(principal, body.Actor), body.Note); err != nil {
 		writeMutationError(w, err)
 		return
 	}
