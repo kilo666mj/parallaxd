@@ -318,6 +318,21 @@ func (s *entityState) reported() check.Status {
 	return s.status
 }
 
+func validateEligibleProbers(chk check.Check, peers []Peer, byName map[string]Peer) ([]Peer, error) {
+	if len(chk.Probers) == 0 {
+		return peers, nil
+	}
+	eligible := make([]Peer, 0, len(chk.Probers))
+	for _, name := range chk.Probers {
+		peer, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("check %q names unregistered eligible prober %q", chk.Name, name)
+		}
+		eligible = append(eligible, peer)
+	}
+	return eligible, nil
+}
+
 // New builds a coordinator.
 func New(cfg Config) (*Coordinator, error) {
 	switch {
@@ -409,16 +424,20 @@ func New(cfg Config) (*Coordinator, error) {
 		if _, dup := checks[c.Name]; dup {
 			return nil, fmt.Errorf("duplicate check name %q", c.Name)
 		}
-		if c.Quorum.Of > len(peers) {
+		eligiblePeers, err := validateEligibleProbers(c, peers, byName)
+		if err != nil {
+			return nil, err
+		}
+		if c.Quorum.Of > len(eligiblePeers) {
 			// Caught here rather than discovered during an incident, when the
 			// verdict would be permanently inconclusive and nothing would
 			// alert.
 			return nil, fmt.Errorf("check %q asks %d probers but only %d are registered",
-				c.Name, c.Quorum.Of, len(peers))
+				c.Name, c.Quorum.Of, len(eligiblePeers))
 		}
 		if c.Quorum.DistinctProviders {
 			providers := make(map[string]bool)
-			for _, p := range peers {
+			for _, p := range eligiblePeers {
 				if strings.TrimSpace(p.Provider) != "" {
 					providers[p.Provider] = true
 				}
@@ -787,7 +806,7 @@ func (c *Coordinator) corroborators(chk check.Check, reported check.Result) []Pe
 	// prober counted twice, which quorum de-duplicates anyway — so it would
 	// spend a probe to learn nothing.
 	var candidates []Peer
-	for _, p := range c.peers {
+	for _, p := range c.eligiblePeers(chk) {
 		if p.Name != reported.Prober {
 			candidates = append(candidates, p)
 		}

@@ -60,6 +60,25 @@ func TestTimeoutMustBeShorterThanInterval(t *testing.T) {
 	}
 }
 
+func TestEligibleProberPoolIsCoherent(t *testing.T) {
+	c := valid()
+	c.Prober = "probe-a"
+	c.Probers = []string{"probe-a", "probe-b", "probe-c"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid eligible pool rejected: %v", err)
+	}
+
+	c.Probers = []string{"probe-a", "probe-a"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("duplicate eligible prober error = %v", err)
+	}
+
+	c.Probers = []string{"probe-b", "probe-c"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "preferred prober") {
+		t.Fatalf("out-of-pool preferred prober error = %v", err)
+	}
+}
+
 func TestValidateRejects(t *testing.T) {
 	for name, mangle := range map[string]func(*Check){
 		"no name":       func(c *Check) { c.Name = "" },

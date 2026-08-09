@@ -223,6 +223,8 @@ parallaxd_mesh_max_age: 3m
 #       interval: 1m
 #       timeout: 10s
 #       quorum: {agree: 2, of: 3, distinct_providers: true}
+#       # Optional: restrict ownership, failover, and corroboration to a pool.
+#       probers: [internal-a, internal-b, internal-c]
 #
 # The coordinator honours `prober:` too, so /v1/assignments and Status() report
 # who actually runs each check rather than a hash that disagrees with reality.

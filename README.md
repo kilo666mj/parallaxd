@@ -724,7 +724,27 @@ can create, edit, clone, disable, or delete a monitor without redeploying the
 fleet. The editor validates the complete catalogue before activating a change,
 so it rejects unsatisfiable quorums, unknown probers, and changes that would
 leave a component referring to a disabled or missing monitor. **Test from all
-probers** performs real probes without changing status, history, or incidents.
+eligible probers** performs real probes without changing status, history, or
+incidents.
+
+`probers` optionally limits a monitor's ownership, failover, and corroboration
+to a named pool. An empty list preserves fleet-wide behavior. Use a pool for
+private targets so a public prober is never asked to judge a service it cannot
+route to:
+
+```json
+{
+  "name": "internal-prometheus",
+  "kind": "http",
+  "target": "http://prom.internal:9090",
+  "vantage": "internal",
+  "prober": "lbc1n3",
+  "probers": ["lbc1n3", "dnsc1n2", "backup"],
+  "interval": "1m",
+  "timeout": "10s",
+  "quorum": {"agree": 2, "of": 3}
+}
+```
 
 Every accepted change is persisted as a full-catalogue revision and replicated
 to the warm standby. The **Audit** view records the actor and action and can
