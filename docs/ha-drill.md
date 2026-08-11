@@ -27,7 +27,21 @@ primary cannot be positively fenced.
    independent control path that it cannot restart or accept coordinator
    traffic.
 2. Recheck the standby's final sync timestamp and record the recovery point.
-3. Promote with an authenticated admin request:
+   The guarded command performs this check without changing state:
+
+   ```sh
+   parallaxd-ha -target https://standby.internal:8972 -preflight-only
+   ```
+
+3. Promote with the guarded command after the independent fence verification:
+
+   ```sh
+   parallaxd-ha -target https://standby.internal:8972 \
+     -token-file /secure/operator-token -actor drill-operator \
+     -confirm-primary-fenced
+   ```
+
+   The equivalent authenticated API request is:
 
    ```sh
    curl -fsS -X POST https://standby.internal:8972/v1/ha/promote \

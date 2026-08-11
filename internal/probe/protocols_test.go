@@ -192,3 +192,72 @@ func TestSMTPFixtureExercisesGreetingEHLOAndNOOP(t *testing.T) {
 		}
 	}
 }
+
+func TestSMTPFixtureExercisesSTARTTLS(t *testing.T) {
+	cert, roots := localCertificate(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		fmt.Fprint(conn, "220 fixture ESMTP ready\r\n")
+		reader := bufio.NewReader(conn)
+		line, err := reader.ReadString('\n')
+		if err != nil || !strings.HasPrefix(line, "EHLO ") {
+			done <- fmt.Errorf("initial EHLO: %q: %w", line, err)
+			return
+		}
+		fmt.Fprint(conn, "250-fixture\r\n250 STARTTLS\r\n")
+		line, err = reader.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) != "STARTTLS" {
+			done <- fmt.Errorf("STARTTLS: %q: %w", line, err)
+			return
+		}
+		fmt.Fprint(conn, "220 begin TLS\r\n")
+		tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+		if err := tlsConn.Handshake(); err != nil {
+			done <- err
+			return
+		}
+		reader = bufio.NewReader(tlsConn)
+		for {
+			line, err = reader.ReadString('\n')
+			if err != nil {
+				done <- err
+				return
+			}
+			switch {
+			case strings.HasPrefix(line, "EHLO "):
+				fmt.Fprint(tlsConn, "250 fixture\r\n")
+			case strings.TrimSpace(line) == "NOOP":
+				fmt.Fprint(tlsConn, "250 OK\r\n")
+			case strings.TrimSpace(line) == "QUIT":
+				fmt.Fprint(tlsConn, "221 bye\r\n")
+				done <- nil
+				return
+			default:
+				done <- fmt.Errorf("unexpected command %q", line)
+				return
+			}
+		}
+	}()
+
+	c := testCheck(check.KindSMTP, ln.Addr().String())
+	c.StartTLS = true
+	c.ServerName = "localhost"
+	status, _, detail := (SMTP{RootCAs: roots}).Probe(context.Background(), c)
+	if status != check.StatusUp {
+		t.Fatalf("status=%s detail=%q", status, detail)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
