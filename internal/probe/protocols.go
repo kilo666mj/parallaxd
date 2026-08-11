@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/netip"
@@ -83,6 +84,9 @@ func netipAddr(ip net.IP) (netip.Addr, bool) { return netip.AddrFromSlice(ip) }
 type TLS struct {
 	Policy Policy
 	Dialer *net.Dialer
+	// RootCAs is nil in production, which uses the host trust store. Tests and
+	// embedded callers may provide a private trust root for local fixtures.
+	RootCAs *x509.CertPool
 }
 
 func (TLS) Kind() check.Kind { return check.KindTLS }
@@ -102,7 +106,7 @@ func (t TLS) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 		return s, 0, d
 	}
 	defer conn.Close()
-	tc := tls.Client(conn, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12})
+	tc := tls.Client(conn, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: t.RootCAs})
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return check.StatusDown, time.Since(start), fmt.Sprintf("TLS handshake: %v", err)
 	}
@@ -117,6 +121,8 @@ func (t TLS) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 type SMTP struct {
 	Policy Policy
 	Dialer *net.Dialer
+	// RootCAs has the same trust semantics as TLS.RootCAs.
+	RootCAs *x509.CertPool
 }
 
 func (SMTP) Kind() check.Kind { return check.KindSMTP }
@@ -148,7 +154,7 @@ func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP EHLO: %v", err)
 	}
 	if c.StartTLS {
-		if err := client.StartTLS(&tls.Config{ServerName: name, MinVersion: tls.VersionTLS12}); err != nil {
+		if err := client.StartTLS(&tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: s.RootCAs}); err != nil {
 			return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP STARTTLS: %v", err)
 		}
 	}

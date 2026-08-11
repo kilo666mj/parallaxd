@@ -7,10 +7,11 @@ Parallax is the apparent shift of an object viewed from two separated points,
 and the method by which its distance is established. That is the idea here — a
 single viewpoint cannot establish the fact, separated viewpoints can.
 
-> **Status: Phase 3.** Coordinator, prober and watcher build and run; signed
-> dynamic assignments, automatic failover away from silent or isolated owners,
-> durable state, incident history, maintenance windows and a status dashboard
-> are included.
+> **Status: operational.** Coordinator, public and private probers, watcher and
+> warm standby are deployed; signed dynamic assignments, automatic failover,
+> durable operations, monitor management and the status dashboard are included.
+> The current milestone is operational assurance and integration coverage; see
+> the [roadmap](ROADMAP.md).
 
 ## The problem
 
@@ -450,11 +451,11 @@ spend the corroboration budget on reports carrying no information — and during
 a partition, when every cut-off prober sees every target as down, that is the
 whole budget, starving the triggers that mean something.
 
-The cost is real and worth stating: **a check whose assigned prober is isolated
-stops being evaluated until it rejoins.** That is why isolation *alerts* rather
-than silently suppressing — the operator is told those checks are no longer
-being run. Reassigning them to a healthy prober needs pushed assignments, which
-is not built yet.
+An isolated prober's results stop being evaluated until it rejoins. The
+coordinator removes that owner from the eligible set and reassigns its checks
+to healthy probers; isolation still alerts because the fleet has lost a
+vantage and may no longer be able to meet the configured quorum or provider
+diversity.
 
 Suppression expires with the report that caused it (`mesh_max_age`, default
 3 minutes). Suppression that outlives the partition is indistinguishable from
