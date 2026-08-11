@@ -62,7 +62,7 @@
     - name: Resolve the distinct build architectures
       ansible.builtin.set_fact:
         parallaxd_build_architectures: >-
-          {{ groups['parallaxd']
+          {{ ansible_play_hosts_all
              | map('extract', hostvars, 'parallaxd_goarch')
              | unique | list }}
       run_once: true
