@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
 )
 
 func httpCheck(target string) check.Check {
@@ -27,6 +29,18 @@ func tcpCheck(target string) check.Check {
 	c := httpCheck(target)
 	c.Kind = check.KindTCP
 	return c
+}
+
+func TestICMPReplyAllowsKernelRewrittenID(t *testing.T) {
+	reply := &icmp.Message{Type: ipv4.ICMPTypeEchoReply, Body: &icmp.Echo{
+		ID: 4321, Seq: 7, Data: []byte(icmpPayload),
+	}}
+	if !matchesICMPEchoReply(reply, ipv4.ICMPTypeEchoReply, 7) {
+		t.Fatal("reply with a kernel-assigned echo ID did not match")
+	}
+	if matchesICMPEchoReply(reply, ipv4.ICMPTypeEchoReply, 8) {
+		t.Fatal("reply with the wrong sequence matched")
+	}
 }
 
 func TestHTTPUp(t *testing.T) {

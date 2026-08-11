@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/netip"
 	"net/smtp"
-	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -162,6 +161,8 @@ func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 
 var icmpSequence atomic.Uint32
 
+const icmpPayload = "parallaxd"
+
 type ICMP struct {
 	Policy   Policy
 	Resolver *net.Resolver
@@ -205,8 +206,8 @@ func (p ICMP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
-	seq, id := int(icmpSequence.Add(1)&0xffff), os.Getpid()&0xffff
-	msg := icmp.Message{Type: echo, Body: &icmp.Echo{ID: id, Seq: seq, Data: []byte("parallaxd")}}
+	seq := int(icmpSequence.Add(1) & 0xffff)
+	msg := icmp.Message{Type: echo, Body: &icmp.Echo{Seq: seq, Data: []byte(icmpPayload)}}
 	raw, err := msg.Marshal(nil)
 	if err != nil {
 		return check.StatusUnknown, 0, err.Error()
@@ -227,9 +228,16 @@ func (p ICMP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		if err != nil {
 			continue
 		}
-		body, ok := parsed.Body.(*icmp.Echo)
-		if parsed.Type == reply && ok && body.ID == id && body.Seq == seq {
+		if matchesICMPEchoReply(parsed, reply, seq) {
 			return check.StatusUp, time.Since(start), fmt.Sprintf("ICMP reply from %s", peer)
 		}
 	}
+}
+
+func matchesICMPEchoReply(parsed *icmp.Message, reply icmp.Type, seq int) bool {
+	body, ok := parsed.Body.(*icmp.Echo)
+	// Linux ping sockets replace the caller's echo ID with a socket-specific
+	// value. Each probe owns its socket, so sequence plus payload identify the
+	// response without rejecting the kernel-rewritten ID.
+	return parsed.Type == reply && ok && body.Seq == seq && string(body.Data) == icmpPayload
 }
