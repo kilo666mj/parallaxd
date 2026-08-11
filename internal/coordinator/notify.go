@@ -132,7 +132,7 @@ func (a Alert) Summary() string {
 	case KindRecovered:
 		verb = "RECOVERED"
 	case KindSilent:
-		verb = "SILENT"
+		verb = "NOT REPORTING"
 	case KindReporting:
 		verb = "REPORTING"
 	case KindIsolated:

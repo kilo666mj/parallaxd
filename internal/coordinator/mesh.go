@@ -141,7 +141,11 @@ func (c *Coordinator) handleMesh(w http.ResponseWriter, r *http.Request) {
 	// receive its preferred assignments again; waiting for a check result
 	// creates a deadlock because silent owners are deliberately assigned no
 	// checks.
-	if c.markReporting(report.Prober) {
+	// A mesh report proves the process is alive, but an isolated prober still
+	// cannot provide usable monitoring evidence. Keep it silent until its mesh
+	// view recovers; otherwise each isolated report clears the silence and the
+	// watchdog reopens it on the next tick.
+	if !c.isolatedProbers()[report.Prober] && c.markReporting(report.Prober) {
 		c.emit(r.Context(), Alert{
 			Prober: report.Prober,
 			Kind:   KindReporting,
