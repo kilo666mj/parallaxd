@@ -856,6 +856,25 @@ Failover is an operator procedure:
 4. Move the coordinator service address (VIP, load balancer, or DNS) to the
    promoted host and verify prober submissions and pending-alert delivery.
 
+Install the operator command with `go install ./cmd/parallaxd-ha`.
+`parallaxd-ha` guards steps 2 and 3. Run its preflight before fencing, repeat
+it after the fence is independently verified, and only then authorize the
+promotion:
+
+```sh
+parallaxd-ha -target http://10.77.0.2:8972 -preflight-only
+parallaxd-ha -target http://10.77.0.2:8972 \
+  -token-file /secure/operator-token -actor alice \
+  -confirm-primary-fenced
+```
+
+By default it refuses stale or failed replication, lag over two minutes,
+queued results or notifications, an active target, and any target that is not
+a configured standby. The confirmation is an operator attestation, not a
+reachability test: loss of contact with the primary is never sufficient proof
+that it is fenced. The command deliberately does not move traffic or remove a
+fence.
+
 Promotion is fsynced before the API reports success and survives restart. It
 is intentionally one-way; returning service to the old host means rebuilding
 that host as a standby from the current active coordinator. `GET /v1/replica`
