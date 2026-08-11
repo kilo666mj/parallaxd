@@ -154,6 +154,38 @@ func TestRejoinedProberCountsAgain(t *testing.T) {
 	}
 }
 
+func TestMeshReportRestoresSilentProberAssignments(t *testing.T) {
+	h := newHarness(t, 3, check.Quorum{Agree: 2, Of: 3}, nil)
+	srv := httptest.NewServer(h.coord.Handler())
+	defer srv.Close()
+
+	chk := h.chk
+	preferred, ok := h.coord.baseAssignedTo(chk)
+	if !ok {
+		t.Fatal("service check has no preferred owner")
+	}
+	h.coord.mu.Lock()
+	h.coord.silent[preferred] = true
+	h.coord.mu.Unlock()
+	if assigned, _ := h.coord.assignedTo(chk); assigned == preferred {
+		t.Fatalf("silent owner %q retained its assignment", preferred)
+	}
+
+	if code := h.submitMesh(t, srv, preferred, map[string]bool{}); code != http.StatusAccepted {
+		t.Fatalf("POST /v1/mesh status = %d, want %d", code, http.StatusAccepted)
+	}
+	if h.coord.isSilent(preferred) {
+		t.Fatalf("authenticated mesh report did not clear silence for %q", preferred)
+	}
+	if assigned, _ := h.coord.assignedTo(chk); assigned != preferred {
+		t.Fatalf("assignment = %q, want restored preferred owner %q", assigned, preferred)
+	}
+	alerts := h.notifier.all()
+	if len(alerts) != 1 || alerts[0].Kind != KindReporting || alerts[0].Prober != preferred {
+		t.Fatalf("alerts = %+v, want one reporting recovery for %q", alerts, preferred)
+	}
+}
+
 // Silencing a prober is a monitoring gap. If it happens quietly, Phase 2 has
 // traded loud false alerts for a quiet blind spot — the worse failure.
 func TestIsolationIsAlertedOnceAndSoIsTheRejoin(t *testing.T) {

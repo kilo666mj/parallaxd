@@ -135,6 +135,20 @@ func (c *Coordinator) handleMesh(w http.ResponseWriter, r *http.Request) {
 
 	c.meshState.put(report)
 	c.reportMeshTransitions(r.Context())
+	// Mesh reporting and scheduled probing are performed by the same prober
+	// process. A fresh, authenticated mesh report therefore proves that a
+	// previously silent owner has returned. Clear the silence here so it can
+	// receive its preferred assignments again; waiting for a check result
+	// creates a deadlock because silent owners are deliberately assigned no
+	// checks.
+	if c.markReporting(report.Prober) {
+		c.emit(r.Context(), Alert{
+			Prober: report.Prober,
+			Kind:   KindReporting,
+			At:     c.now(),
+			Detail: "reporting again; preferred assignments restored",
+		})
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
