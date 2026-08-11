@@ -355,3 +355,33 @@ func TestWebhookFailureDoesNotExposeSecretURL(t *testing.T) {
 		t.Fatalf("error exposed webhook URL: %v", err)
 	}
 }
+
+func TestWebhookIncludesChatPresentation(t *testing.T) {
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := WebhookNotifier{
+		URL: srv.URL, Username: "parallaxd", Channel: "parallaxd",
+		IconEmoji: ":satellite:", IconURL: "https://example.invalid/parallaxd.png",
+	}
+	if err := n.Notify(t.Context(), Alert{Check: "svc", Kind: KindDown, At: time.Now()}); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	for field, want := range map[string]string{
+		"username": "parallaxd", "channel": "parallaxd", "icon_emoji": ":satellite:",
+		"icon_url": "https://example.invalid/parallaxd.png",
+	} {
+		if got := payload[field]; got != want {
+			t.Errorf("%s = %v, want %q", field, got, want)
+		}
+	}
+	if payload["text"] == "" {
+		t.Error("payload has no text")
+	}
+}

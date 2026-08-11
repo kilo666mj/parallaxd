@@ -52,8 +52,12 @@ type config struct {
 	// Webhook receives the alert. Deliberately separate from the
 	// coordinator's: a watcher that alerted through the thing it watches
 	// would be silent in exactly the case it exists for.
-	Webhook        string            `json:"webhook,omitempty"`
-	WebhookHeaders map[string]string `json:"webhook_headers,omitempty"`
+	Webhook          string            `json:"webhook,omitempty"`
+	WebhookHeaders   map[string]string `json:"webhook_headers,omitempty"`
+	WebhookUsername  string            `json:"webhook_username,omitempty"`
+	WebhookChannel   string            `json:"webhook_channel,omitempty"`
+	WebhookIconURL   string            `json:"webhook_icon_url,omitempty"`
+	WebhookIconEmoji string            `json:"webhook_icon_emoji,omitempty"`
 
 	CoordinatorName string `json:"coordinator_name"`
 	CoordinatorKey  string `json:"coordinator_key"`
@@ -115,7 +119,10 @@ func run(configPath string, log *slog.Logger) error {
 	if cfg.Webhook != "" {
 		notifier = coordinator.Notifiers{
 			coordinator.LogNotifier{Logger: log},
-			coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders},
+			coordinator.WebhookNotifier{
+				URL: cfg.Webhook, Headers: cfg.WebhookHeaders, Username: cfg.WebhookUsername,
+				Channel: cfg.WebhookChannel, IconURL: cfg.WebhookIconURL, IconEmoji: cfg.WebhookIconEmoji,
+			},
 		}
 	} else {
 		// Said out loud. A watcher whose only output is a log on a host nobody

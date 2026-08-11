@@ -279,6 +279,12 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) error {
 type WebhookNotifier struct {
 	URL    string
 	Client *http.Client
+	// Presentation fields follow the Slack-compatible incoming webhook
+	// convention used by Mattermost. Generic receivers may ignore them.
+	Username  string
+	Channel   string
+	IconURL   string
+	IconEmoji string
 
 	// Headers are sent with every request, which is where an authorization
 	// token goes. Kept general rather than growing a field per service.
@@ -291,8 +297,15 @@ func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 		// Duplicated at the top level so a receiver that renders a single
 		// field — most chat webhooks — shows something useful without being
 		// taught this schema.
-		Text string `json:"text"`
-	}{Alert: a, Text: a.Summary()})
+		Text      string `json:"text"`
+		Username  string `json:"username,omitempty"`
+		Channel   string `json:"channel,omitempty"`
+		IconURL   string `json:"icon_url,omitempty"`
+		IconEmoji string `json:"icon_emoji,omitempty"`
+	}{
+		Alert: a, Text: a.Summary(), Username: n.Username, Channel: n.Channel,
+		IconURL: n.IconURL, IconEmoji: n.IconEmoji,
+	})
 	if err != nil {
 		return err
 	}
