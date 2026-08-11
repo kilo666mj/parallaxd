@@ -113,5 +113,6 @@ The standby resumed replication with 178 ms reported apply lag.
 - the notification queue was empty
 - primary and standby coordinator services were healthy on `d644a26`
 
-The fenced standby-promotion exercise remains separate and must be performed
-in a declared maintenance window following [`ha-drill.md`](ha-drill.md).
+The fenced standby-promotion and controlled failback were subsequently
+completed in the same maintenance window. See
+[`ha-failover-2026-08-11.md`](ha-failover-2026-08-11.md).
