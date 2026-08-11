@@ -54,14 +54,16 @@ by `controlled-failback-2026-08-11` from state applied at 13:50:55 CEST, with
 350 ms reported replication lag.
 
 Public probers returned to `172.245.253.218:8972`; internal probers returned to
-`10.77.0.1:8972`. Morty's old network fence was removed. Spike's persisted
+`10.77.0.1:8972`. Morty's old network fence was removed and its temporary
+promotion marker was cleared after restoring its canonical `primary` role.
+Spike's persisted
 promotion marker was cleared only while its service and network were fenced,
 then it was started from the merged build as an inactive standby pulling from
 Morty. Its first verified replica apply lag was 413 ms.
 
 ## Final state
 
-- Morty is the promoted active coordinator and retains the public tunnel.
+- Morty is the canonical active primary and retains the public tunnel.
 - Spike is an inactive, unpromoted standby replicating from Morty.
 - Both coordinator binaries report version `8411a9a`.
 - All seven probers report to Morty; no checks are stale.
