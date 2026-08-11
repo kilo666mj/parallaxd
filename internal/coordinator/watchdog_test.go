@@ -138,6 +138,9 @@ func TestSilentProberAlerts(t *testing.T) {
 	if !strings.Contains(a.Summary(), "svc") {
 		t.Errorf("summary = %q, want it to name the check nobody is running", a.Summary())
 	}
+	if !strings.HasPrefix(a.Summary(), "NOT REPORTING prober ") {
+		t.Errorf("summary = %q, want an unambiguous reporting-state label", a.Summary())
+	}
 }
 
 // The distinction the whole design rests on, applied to its own failure: a

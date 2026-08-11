@@ -204,10 +204,25 @@ func TestIsolationIsAlertedOnceAndSoIsTheRejoin(t *testing.T) {
 		t.Fatalf("got %d alerts, want no repeat while it stays isolated", n)
 	}
 
+	// An authenticated report proves the prober process is alive, but it does
+	// not make that prober's monitoring evidence usable while it remains cut
+	// off from every peer. Clearing silence here makes the watchdog and mesh
+	// reporter alternate NOT REPORTING/REPORTING forever.
+	h.coord.mu.Lock()
+	h.coord.silent["probe-a"] = true
+	h.coord.mu.Unlock()
+	h.submitMesh(t, srv, "probe-a", map[string]bool{"probe-b": false, "probe-c": false})
+	if !h.coord.isSilent("probe-a") {
+		t.Fatal("isolated mesh report cleared the prober's silence")
+	}
+	if n := h.notifier.count(); n != 1 {
+		t.Fatalf("got %d alerts, want no reporting recovery while isolated", n)
+	}
+
 	h.submitMesh(t, srv, "probe-a", map[string]bool{"probe-b": true, "probe-c": true})
 	alerts = h.notifier.all()
-	if len(alerts) != 2 || alerts[1].Kind != KindRejoined {
-		t.Fatalf("alerts = %+v, want a rejoin — otherwise the alert never closes", alerts)
+	if len(alerts) != 3 || alerts[1].Kind != KindRejoined || alerts[2].Kind != KindReporting {
+		t.Fatalf("alerts = %+v, want rejoin and reporting recoveries — otherwise the alerts never close", alerts)
 	}
 }
 
