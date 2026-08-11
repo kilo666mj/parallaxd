@@ -24,14 +24,24 @@ lifecycle, and observation history are implemented and deployed.
 The next milestone is operational assurance rather than new product surface:
 
 1. Run and record the acceptance exercise in
-   [`docs/acceptance.md`](docs/acceptance.md), including private-prober failure,
-   reassignment, alert, recovery, and persistence scenarios.
+   [`docs/acceptance-2026-08-11.md`](docs/acceptance-2026-08-11.md), including
+   private-prober failure, reassignment, alert, recovery, and persistence
+   scenarios. **Completed 2026-08-11.**
 2. Rehearse the fenced standby-promotion procedure in
-   [`docs/ha-drill.md`](docs/ha-drill.md).
-3. Expand deterministic protocol and process-level integration coverage for
+   [`docs/ha-drill.md`](docs/ha-drill.md). **Completed 2026-08-11; see the
+   [drill record](docs/ha-failover-2026-08-11.md).**
+3. Add a guarded manual failover command that preflights replication and
+   queues, backs up both coordinators, positively fences and independently
+   verifies the old active, promotes exactly one target, moves probe traffic,
+   and rebuilds the former active as standby. It must never infer authority
+   from reachability loss alone.
+4. Make production Ansible runs compatible with the command-restricting SSH
+   gateway; ordinary SSH commands work, but Python module execution and file
+   transfer are currently refused.
+5. Expand deterministic protocol and process-level integration coverage for
    DNS, SMTP, TLS, ICMP capability behavior, assignment failover, notification
    ordering, and coordinator restart recovery.
-4. Treat dependency updates, security review, backups, and production findings
+6. Treat dependency updates, security review, backups, and production findings
    as ongoing maintenance.
 
 New check kinds and reporting features should be driven by operational need.
