@@ -515,6 +515,56 @@
         - parallaxd_manage_firewalld
         - parallaxd_internal_prober_hosts | length > 0
 
+    # Docker's iptables compatibility chain runs before firewalld's nftables
+    # forward hook on mixed hosts. Keep the exception limited to authenticated
+    # traffic crossing the dedicated parallaxd interface in both directions.
+    - name: Detect Docker's forwarding chain on the primary hub
+      ansible.builtin.command:
+        cmd: /usr/sbin/iptables -w -nL DOCKER-USER
+      register: parallaxd_docker_user_chain
+      changed_when: false
+      failed_when: false
+      when:
+        - inventory_hostname == groups['parallaxd_coordinator'][0]
+        - parallaxd_internal_prober_hosts | length > 0
+
+    - name: Install persistent Docker-compatible tunnel forwarding
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/parallaxd-wireguard-forward.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Allow parallaxd peer mesh through Docker forwarding
+          After=docker.service wg-quick@{{ parallaxd_ha_wireguard_interface }}.service
+          Requires=wg-quick@{{ parallaxd_ha_wireguard_interface }}.service
+          PartOf=wg-quick@{{ parallaxd_ha_wireguard_interface }}.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/sh -c '/usr/sbin/iptables -w -C DOCKER-USER -i {{ parallaxd_ha_wireguard_interface }} -o {{ parallaxd_ha_wireguard_interface }} -j ACCEPT || /usr/sbin/iptables -w -I DOCKER-USER 1 -i {{ parallaxd_ha_wireguard_interface }} -o {{ parallaxd_ha_wireguard_interface }} -j ACCEPT'
+          ExecStop=/bin/sh -c '/usr/sbin/iptables -w -D DOCKER-USER -i {{ parallaxd_ha_wireguard_interface }} -o {{ parallaxd_ha_wireguard_interface }} -j ACCEPT || true'
+
+          [Install]
+          WantedBy=multi-user.target
+      when:
+        - inventory_hostname == groups['parallaxd_coordinator'][0]
+        - parallaxd_internal_prober_hosts | length > 0
+        - parallaxd_docker_user_chain.rc == 0
+
+    - name: Enable Docker-compatible tunnel forwarding
+      ansible.builtin.systemd:
+        name: parallaxd-wireguard-forward.service
+        enabled: true
+        state: started
+        daemon_reload: true
+      when:
+        - inventory_hostname == groups['parallaxd_coordinator'][0]
+        - parallaxd_internal_prober_hosts | length > 0
+        - parallaxd_docker_user_chain.rc == 0
+
     - name: Resolve encrypted peers that must be reachable
       ansible.builtin.set_fact:
         parallaxd_wireguard_ping_targets: >-
