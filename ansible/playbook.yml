@@ -415,7 +415,22 @@
              else parallaxd_standby_hosts[0] }}
       when: inventory_hostname in parallaxd_coordinator_nodes
 
+    # In check mode template compares the candidate directly with the live
+    # destination without writing it. The normal path below still validates a
+    # temporary file before the atomic install.
+    - name: Preview parallaxd WireGuard configuration changes
+      ansible.builtin.template:
+        src: ha-wireguard.conf.j2
+        dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
+        owner: root
+        group: root
+        mode: "0400"
+      when: ansible_check_mode
+      no_log: true
+      notify: Restart parallaxd WireGuard
+
     - name: Validate and install the parallaxd WireGuard interface
+      when: not ansible_check_mode
       block:
         - name: Render the parallaxd WireGuard candidate
           ansible.builtin.template:

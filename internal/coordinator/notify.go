@@ -292,19 +292,35 @@ type WebhookNotifier struct {
 }
 
 func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
+	summary := a.Summary()
+	type attachment struct {
+		Fallback string `json:"fallback"`
+		Color    string `json:"color"`
+		Text     string `json:"text"`
+	}
+	text := summary
+	var attachments []attachment
+	// Mattermost and Slack render top-level text and attachment text twice if
+	// both are populated. Presentation fields identify the chat-compatible
+	// form; fallback keeps notifications useful outside the full client.
+	if n.Username != "" || n.Channel != "" || n.IconURL != "" || n.IconEmoji != "" {
+		text = ""
+		attachments = []attachment{{Fallback: summary, Color: alertColor(a.Kind), Text: summary}}
+	}
 	body, err := json.Marshal(struct {
 		Alert
 		// Duplicated at the top level so a receiver that renders a single
 		// field — most chat webhooks — shows something useful without being
 		// taught this schema.
-		Text      string `json:"text"`
-		Username  string `json:"username,omitempty"`
-		Channel   string `json:"channel,omitempty"`
-		IconURL   string `json:"icon_url,omitempty"`
-		IconEmoji string `json:"icon_emoji,omitempty"`
+		Text        string       `json:"text,omitempty"`
+		Username    string       `json:"username,omitempty"`
+		Channel     string       `json:"channel,omitempty"`
+		IconURL     string       `json:"icon_url,omitempty"`
+		IconEmoji   string       `json:"icon_emoji,omitempty"`
+		Attachments []attachment `json:"attachments,omitempty"`
 	}{
-		Alert: a, Text: a.Summary(), Username: n.Username, Channel: n.Channel,
-		IconURL: n.IconURL, IconEmoji: n.IconEmoji,
+		Alert: a, Text: text, Username: n.Username, Channel: n.Channel,
+		IconURL: n.IconURL, IconEmoji: n.IconEmoji, Attachments: attachments,
 	})
 	if err != nil {
 		return err
@@ -339,6 +355,15 @@ func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 		return fmt.Errorf("webhook returned %s", resp.Status)
 	}
 	return nil
+}
+
+func alertColor(kind Kind) string {
+	switch kind {
+	case KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
+		return "#2ECC71"
+	default:
+		return "#D24B4E"
+	}
 }
 
 // Notifiers delivers to several destinations. One failing does not stop the

@@ -38,12 +38,11 @@ The next milestone is operational assurance rather than new product surface:
    runbook; reachability loss is never treated as authority. **Guarded
    preflight/promotion completed; site-specific backup, fence, traffic, and
    rebuild automation remains.**
-4. Provide Ansible a transport path that permits its Python module wrapper and
-   file transfer. The command-restricting public SSH gateway refuses both and
-   cannot support general Ansible by client configuration alone. The supported
-   alternatives and security boundary are recorded in
-   [`docs/operations.md`](docs/operations.md). **Requires an external deployment
-   endpoint or internal runner.**
+4. Permit Ansible's Python module wrapper and file transfer through the
+   command-restricting SSH gateway for every managed public host. All eight
+   inventory hosts now pass module execution; keep the deployment commands
+   deliberately allowlisted rather than opening an unrestricted shell.
+   **Completed 2026-08-11.**
 5. Maintain deterministic protocol and process coverage for DNS, SMTP and
    STARTTLS, TLS, ICMP reply behavior, assignment failover, notification
    ordering, HA replication, and coordinator restart recovery. **Completed.**

@@ -381,7 +381,47 @@ func TestWebhookIncludesChatPresentation(t *testing.T) {
 			t.Errorf("%s = %v, want %q", field, got, want)
 		}
 	}
-	if payload["text"] == "" {
-		t.Error("payload has no text")
+	if _, ok := payload["text"]; ok {
+		t.Error("chat payload duplicates attachment in top-level text")
+	}
+	attachments, ok := payload["attachments"].([]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("attachments = %#v", payload["attachments"])
+	}
+	attachment, ok := attachments[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attachment = %#v", attachments[0])
+	}
+	if attachment["color"] != "#D24B4E" || attachment["text"] == "" || attachment["fallback"] == "" {
+		t.Errorf("attachment = %#v", attachment)
+	}
+}
+
+func TestWebhookAttachmentColorsRecoveriesGreen(t *testing.T) {
+	for _, kind := range []Kind{KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered} {
+		if got := alertColor(kind); got != "#2ECC71" {
+			t.Errorf("alertColor(%q) = %q, want green", kind, got)
+		}
+	}
+	for _, kind := range []Kind{KindDown, KindSilent, KindIsolated, KindUnwatched, KindWatchLost} {
+		if got := alertColor(kind); got != "#D24B4E" {
+			t.Errorf("alertColor(%q) = %q, want red", kind, got)
+		}
+	}
+}
+
+func TestGenericWebhookRetainsTopLevelText(t *testing.T) {
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+	}))
+	defer srv.Close()
+	if err := (WebhookNotifier{URL: srv.URL}).Notify(t.Context(), Alert{Check: "svc", Kind: KindDown}); err != nil {
+		t.Fatal(err)
+	}
+	if payload["text"] == "" || payload["attachments"] != nil {
+		t.Errorf("generic payload = %#v", payload)
 	}
 }
