@@ -143,6 +143,10 @@ parallaxd_watch_check_interval: 30s
 # looking healthy.
 parallaxd_watch_webhook: "{{ parallaxd_webhook }}"
 parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
+parallaxd_watch_webhook_username: "{{ parallaxd_webhook_username }}"
+parallaxd_watch_webhook_channel: "{{ parallaxd_webhook_channel }}"
+parallaxd_watch_webhook_icon_url: "{{ parallaxd_webhook_icon_url }}"
+parallaxd_watch_webhook_icon_emoji: "{{ parallaxd_webhook_icon_emoji }}"
 
 # Alert destination. The log always gets the alert; this is additional, so a
 # webhook that is down costs the integration and not the record.
@@ -158,6 +162,11 @@ parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
 # silently be empty everywhere.
 parallaxd_webhook: "{{ parallaxd_webhook_url | default('') }}"
 parallaxd_webhook_headers: {}
+parallaxd_webhook_username: parallaxd
+parallaxd_webhook_channel: parallaxd
+parallaxd_webhook_icon_url: >-
+  https://files.michaelspost.com/parallaxd-icon.png
+parallaxd_webhook_icon_emoji: ""
 
 # Additional independently retried webhooks. Routes are optional: a
 # destination with no route receives every alert. Escalations fire once for an

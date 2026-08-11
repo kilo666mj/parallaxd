@@ -50,6 +50,12 @@
 {% endif %}
 {% if parallaxd_webhook | length > 0 %}
   "webhook": "{{ parallaxd_webhook }}",
+	"webhook_username": {{ parallaxd_webhook_username | to_json }},
+	"webhook_channel": {{ parallaxd_webhook_channel | to_json }},
+	"webhook_icon_emoji": {{ parallaxd_webhook_icon_emoji | to_json }},
+{% if parallaxd_webhook_icon_url | length > 0 %}
+	"webhook_icon_url": {{ parallaxd_webhook_icon_url | to_json }},
+{% endif %}
 {% if parallaxd_webhook_headers %}
   "webhook_headers": {{ parallaxd_webhook_headers | to_json }},
 {% endif %}
