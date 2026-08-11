@@ -30,19 +30,28 @@ The next milestone is operational assurance rather than new product surface:
 2. Rehearse the fenced standby-promotion procedure in
    [`docs/ha-drill.md`](docs/ha-drill.md). **Completed 2026-08-11; see the
    [drill record](docs/ha-failover-2026-08-11.md).**
-3. Add a guarded manual failover command that preflights replication and
-   queues, backs up both coordinators, positively fences and independently
-   verifies the old active, promotes exactly one target, moves probe traffic,
-   and rebuilds the former active as standby. It must never infer authority
-   from reachability loss alone.
-4. Make production Ansible runs compatible with the command-restricting SSH
-   gateway; ordinary SSH commands work, but Python module execution and file
-   transfer are currently refused.
-5. Expand deterministic protocol and process-level integration coverage for
-   DNS, SMTP, TLS, ICMP capability behavior, assignment failover, notification
-   ordering, and coordinator restart recovery.
-6. Treat dependency updates, security review, backups, and production findings
-   as ongoing maintenance.
+3. Use the guarded `parallaxd-ha` command for standby preflight and promotion.
+   It refuses stale/erroring replication, unexpected role or active state,
+   excess lag, queued work, and promotion without explicit positive-fence
+   attestation. Backups, independent fence verification, traffic movement, and
+   rebuilding the former active remain visible infrastructure steps in the HA
+   runbook; reachability loss is never treated as authority. **Guarded
+   preflight/promotion completed; site-specific backup, fence, traffic, and
+   rebuild automation remains.**
+4. Provide Ansible a transport path that permits its Python module wrapper and
+   file transfer. The command-restricting public SSH gateway refuses both and
+   cannot support general Ansible by client configuration alone. The supported
+   alternatives and security boundary are recorded in
+   [`docs/operations.md`](docs/operations.md). **Requires an external deployment
+   endpoint or internal runner.**
+5. Maintain deterministic protocol and process coverage for DNS, SMTP and
+   STARTTLS, TLS, ICMP reply behavior, assignment failover, notification
+   ordering, HA replication, and coordinator restart recovery. **Completed.**
+6. Follow [`docs/operations.md`](docs/operations.md) for recurring HA, watcher,
+   delivery, backup-restore, version, firewall, and drift checks. Dependency
+   and vulnerability checks now run weekly. Production checks require a
+   private scheduled runner. **Repository automation completed; private runner
+   scheduling remains.**
 
 New check kinds and reporting features should be driven by operational need.
 The guiding principle remains to make existing checks easy to trust, operate,
