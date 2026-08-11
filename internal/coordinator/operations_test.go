@@ -284,12 +284,12 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 		t.Errorf("X-Frame-Options=%q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Active incidents", "Create silence", "History", "Monitors", "Test from eligible probers", "Monitor revisions", "Users & API tokens", "/v1/history/summary", "/v1/diagnostics", "/v1/monitors", "/v1/auth/login", "/v1/auth/users", "parallaxd_csrf", "sessionStorage"} {
+	for _, want := range []string{"Active incidents", "Create silence", "History", "Monitors", "Test from eligible probers", "Revision ledger", "Access control", "/v1/history/summary", "/v1/diagnostics", "/v1/monitors", "/v1/auth/login", "/v1/auth/users", "parallaxd_csrf", "sessionStorage"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard does not contain %q", want)
 		}
 	}
-	for _, want := range []string{"incidents:i||[]", "silences:s||[]", "(state.monitors||[]).filter", "(state.incidents||[]).filter", "(state.silences||[]).filter", "$('history').innerHTML"} {
+	for _, want := range []string{"incidents:i||[]", "silences:s||[]", "all=state.monitors||[]", "(state.incidents||[]).filter", "(state.silences||[]).filter", "$('history').innerHTML"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard does not contain empty-collection guard %q", want)
 		}
