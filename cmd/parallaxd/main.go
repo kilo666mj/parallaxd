@@ -61,6 +61,10 @@ type config struct {
 	// Webhook, when set, receives every alert as JSON in addition to the log.
 	Webhook                   string                          `json:"webhook,omitempty"`
 	WebhookHeaders            map[string]string               `json:"webhook_headers,omitempty"`
+	WebhookUsername           string                          `json:"webhook_username,omitempty"`
+	WebhookChannel            string                          `json:"webhook_channel,omitempty"`
+	WebhookIconURL            string                          `json:"webhook_icon_url,omitempty"`
+	WebhookIconEmoji          string                          `json:"webhook_icon_emoji,omitempty"`
 	NotificationDestinations  []notificationDestinationConfig `json:"notification_destinations,omitempty"`
 	NotificationRoutes        []coordinator.NotificationRoute `json:"notification_routes,omitempty"`
 	Escalations               []escalationConfig              `json:"escalations,omitempty"`
@@ -90,9 +94,13 @@ type config struct {
 }
 
 type notificationDestinationConfig struct {
-	Name    string            `json:"name"`
-	Webhook string            `json:"webhook"`
-	Headers map[string]string `json:"headers,omitempty"`
+	Name      string            `json:"name"`
+	Webhook   string            `json:"webhook"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Username  string            `json:"username,omitempty"`
+	Channel   string            `json:"channel,omitempty"`
+	IconURL   string            `json:"icon_url,omitempty"`
+	IconEmoji string            `json:"icon_emoji,omitempty"`
 }
 
 type haConfig struct {
@@ -390,11 +398,17 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 	// retrying one cannot duplicate successful deliveries to another.
 	var destinations []coordinator.NotificationDestination
 	if cfg.Webhook != "" {
-		destinations = append(destinations, coordinator.NotificationDestination{Name: "webhook", Notifier: coordinator.WebhookNotifier{URL: cfg.Webhook, Headers: cfg.WebhookHeaders}})
+		destinations = append(destinations, coordinator.NotificationDestination{Name: "webhook", Notifier: coordinator.WebhookNotifier{
+			URL: cfg.Webhook, Headers: cfg.WebhookHeaders, Username: cfg.WebhookUsername,
+			Channel: cfg.WebhookChannel, IconURL: cfg.WebhookIconURL, IconEmoji: cfg.WebhookIconEmoji,
+		}})
 	}
 	for _, destination := range cfg.NotificationDestinations {
 		destinations = append(destinations, coordinator.NotificationDestination{Name: destination.Name,
-			Notifier: coordinator.WebhookNotifier{URL: destination.Webhook, Headers: destination.Headers}})
+			Notifier: coordinator.WebhookNotifier{
+				URL: destination.Webhook, Headers: destination.Headers, Username: destination.Username,
+				Channel: destination.Channel, IconURL: destination.IconURL, IconEmoji: destination.IconEmoji,
+			}})
 	}
 	escalations := make([]coordinator.EscalationPolicy, 0, len(cfg.Escalations))
 	for _, policy := range cfg.Escalations {

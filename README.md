@@ -291,6 +291,13 @@ backoff. Later alerts for that destination queue behind it, preserving `DOWN`
 then `RECOVERED` order without holding up healthy destinations. The legacy
 `webhook` field remains supported as a destination named `webhook`.
 
+Slack-compatible chat presentation fields are optional on both the legacy
+webhook and named destinations: `username`, `channel`, `icon_url`, and
+`icon_emoji`. The legacy equivalents are `webhook_username`,
+`webhook_channel`, `webhook_icon_url`, and `webhook_icon_emoji`. Mattermost
+expects the channel name without `#`; its username and icon override settings
+must be enabled, and a channel-locked webhook cannot override its destination.
+
 Additional destinations can be routed by check, component, prober, and alert
 kind. A destination with no routes receives everything; once any route names a
 destination, only matching alerts go there. The log is the always-on `default`
@@ -298,7 +305,9 @@ destination and cannot be routed away:
 
 ```json
 "notification_destinations": [
-  {"name":"chat", "webhook":"https://chat.example/hooks/alerts"},
+  {"name":"chat", "webhook":"https://chat.example/hooks/alerts",
+   "username":"parallaxd", "channel":"parallaxd",
+   "icon_url":"https://status.example/assets/parallaxd-icon.png"},
   {"name":"pager", "webhook":"https://pager.example/v1/events",
    "headers":{"Authorization":"Bearer ..."}}
 ],
