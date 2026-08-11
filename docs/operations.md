@@ -51,12 +51,11 @@ fleet and should not hold its credentials.
 
 Normal Ansible execution requires a remote shell capable of running its Python
 module wrapper and a transfer mechanism for module payloads and binaries. The
-current public-host gateway permits selected interactive commands but rejects
-all three requirements: interpreter discovery, Python module execution, and
-file transfer. No client-side Ansible setting can make that transport a valid
-general Ansible connection without bypassing the gateway's restriction.
+public-host gateway originally permitted selected interactive commands but
+rejected those requirements. Its allowlist was extended on 2026-08-11 and all
+eight inventory hosts now pass Ansible module execution.
 
-Use one of these controlled paths:
+If that access regresses, use one of these controlled paths:
 
 1. Preferred: run Ansible from an internal administration host that reaches
    SSH directly, leaving the public command gateway restricted.
