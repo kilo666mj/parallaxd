@@ -575,7 +575,7 @@ Alerts are **grouped by the responsible prober**, because the usual cause is one
 prober dying and taking a dozen checks with it:
 
 ```
-SILENT prober probe-c — no results for 4m30s; these checks are not being run: dns, mail, svc
+NOT REPORTING prober probe-c — no results for 4m30s; these checks are not being run: dns, mail, svc
 ```
 
 Once, not per tick, and the return transition alerts too — otherwise an operator

@@ -546,10 +546,6 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	// Provider diversity is coordinator policy, not a claim a prober gets to
 	// make about itself. Always replace the signed value with the registered one.
 	r.Provider = peer.Provider
-	if c.markReporting(r.Prober) {
-		c.emit(ctx, Alert{Prober: r.Prober, Kind: KindReporting, At: c.now(), Detail: "reporting again; preferred assignments restored"})
-	}
-
 	// An isolated prober's result is not evidence, so it is not a trigger
 	// either. Fanning out on it would spend the corroboration budget on
 	// reports carrying no information — and during a partition, when every
@@ -568,6 +564,9 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 			Suppressed: 1, SuppressedProbers: []string{r.Prober},
 			Reason: fmt.Sprintf("%s can reach no peer; its result was not counted", r.Prober),
 		}, nil
+	}
+	if c.markReporting(r.Prober) {
+		c.emit(ctx, Alert{Prober: r.Prober, Kind: KindReporting, At: c.now(), Detail: "reporting again; preferred assignments restored"})
 	}
 
 	v, alert, kind, suspectedAt := c.decide(ctx, chk, r)
@@ -1039,25 +1038,20 @@ func (c *Coordinator) handleResult(w http.ResponseWriter, r *http.Request) {
 	}
 	c.lastScheduled[key] = payload.Result.At
 	c.mu.Unlock()
-	reporting := returning && c.markReporting(payload.Result.Prober)
-
 	// Accepted, then processed in the background. Corroboration takes seconds
 	// and the prober submitting this is single-threaded per check: holding it
 	// open would delay that check's next probe by the length of the fan-out.
 	c.inflight.Add(1)
-	go func(res check.Result, reporting bool) {
+	go func(res check.Result) {
 		defer c.inflight.Done()
 		defer func() { <-c.resultSlots }()
 		ctx, cancel := context.WithTimeout(
 			context.WithoutCancel(r.Context()), c.cfg.FanOutTimeout*2)
 		defer cancel()
-		if reporting {
-			c.emit(ctx, Alert{Prober: res.Prober, Kind: KindReporting, At: c.now(), Detail: "reporting again; preferred assignments restored"})
-		}
 		if _, err := c.Process(ctx, res); err != nil {
 			c.log.Error("processing result", "check", res.Check, "err", err)
 		}
-	}(payload.Result, reporting)
+	}(payload.Result)
 
 	w.WriteHeader(http.StatusAccepted)
 }
