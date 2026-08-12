@@ -123,6 +123,26 @@ func TestMonitorValidationRejectsUnsafeChanges(t *testing.T) {
 	}
 }
 
+func TestMonitorTLSExpiryWarningRoundTrips(t *testing.T) {
+	monitor := testMonitor("certificate")
+	monitor.Kind = check.KindTLS
+	monitor.TLSExpiryWarning = "360h"
+	chk, err := monitor.toCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chk.TLSExpiryWarning != 15*24*time.Hour {
+		t.Fatalf("TLSExpiryWarning=%s", chk.TLSExpiryWarning)
+	}
+	if got := monitorFromCheck(chk).TLSExpiryWarning; got != "360h0m0s" {
+		t.Fatalf("round-trip TLSExpiryWarning=%q", got)
+	}
+	monitor.TLSExpiryWarning = "fifteen days"
+	if _, err := monitor.toCheck(); err == nil {
+		t.Fatal("invalid TLS expiry warning was accepted")
+	}
+}
+
 func TestMonitorCatalogueReplicatesToStandby(t *testing.T) {
 	primaryCfg := durableConfig(t, filepath.Join(t.TempDir(), "primary.json"), &fakeNotifier{}, nil)
 	primaryCfg.OperatorToken = "secret"

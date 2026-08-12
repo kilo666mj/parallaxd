@@ -18,25 +18,26 @@ const maxMonitorRevisions = 100
 // MonitorSpec is the operator-facing form of a check. Durations are strings
 // so the API and dashboard use values such as "1m" rather than nanoseconds.
 type MonitorSpec struct {
-	Name         string            `json:"name"`
-	Enabled      bool              `json:"enabled"`
-	Kind         check.Kind        `json:"kind"`
-	Target       string            `json:"target"`
-	Vantage      check.Vantage     `json:"vantage"`
-	Interval     string            `json:"interval"`
-	Timeout      string            `json:"timeout"`
-	Quorum       check.Quorum      `json:"quorum"`
-	Prober       string            `json:"prober,omitempty"`
-	Probers      []string          `json:"probers,omitempty"`
-	ExpectStatus []int             `json:"expect_status,omitempty"`
-	ExpectBody   string            `json:"expect_body,omitempty"`
-	Send         string            `json:"send,omitempty"`
-	HTTPMethod   string            `json:"http_method,omitempty"`
-	HTTPHeaders  map[string]string `json:"http_headers,omitempty"`
-	HTTPBody     string            `json:"http_body,omitempty"`
-	ServerName   string            `json:"server_name,omitempty"`
-	StartTLS     bool              `json:"start_tls,omitempty"`
-	DNSRecord    string            `json:"dns_record,omitempty"`
+	Name             string            `json:"name"`
+	Enabled          bool              `json:"enabled"`
+	Kind             check.Kind        `json:"kind"`
+	Target           string            `json:"target"`
+	Vantage          check.Vantage     `json:"vantage"`
+	Interval         string            `json:"interval"`
+	Timeout          string            `json:"timeout"`
+	Quorum           check.Quorum      `json:"quorum"`
+	Prober           string            `json:"prober,omitempty"`
+	Probers          []string          `json:"probers,omitempty"`
+	ExpectStatus     []int             `json:"expect_status,omitempty"`
+	ExpectBody       string            `json:"expect_body,omitempty"`
+	Send             string            `json:"send,omitempty"`
+	HTTPMethod       string            `json:"http_method,omitempty"`
+	HTTPHeaders      map[string]string `json:"http_headers,omitempty"`
+	HTTPBody         string            `json:"http_body,omitempty"`
+	ServerName       string            `json:"server_name,omitempty"`
+	StartTLS         bool              `json:"start_tls,omitempty"`
+	DNSRecord        string            `json:"dns_record,omitempty"`
+	TLSExpiryWarning string            `json:"tls_expiry_warning,omitempty"`
 }
 
 type MonitorRevision struct {
@@ -60,7 +61,15 @@ func monitorFromCheck(chk check.Check) MonitorSpec {
 		Quorum: chk.Quorum, Prober: chk.Prober, Probers: append([]string(nil), chk.Probers...), ExpectStatus: append([]int(nil), chk.ExpectStatus...),
 		ExpectBody: chk.ExpectBody, Send: chk.Send, HTTPMethod: chk.HTTPMethod,
 		HTTPHeaders: cloneStrings(chk.HTTPHeaders), HTTPBody: chk.HTTPBody,
-		ServerName: chk.ServerName, StartTLS: chk.StartTLS, DNSRecord: chk.DNSRecord}
+		ServerName: chk.ServerName, StartTLS: chk.StartTLS, DNSRecord: chk.DNSRecord,
+		TLSExpiryWarning: durationString(chk.TLSExpiryWarning)}
+}
+
+func durationString(value time.Duration) string {
+	if value == 0 {
+		return ""
+	}
+	return value.String()
 }
 
 func (m MonitorSpec) toCheck() (check.Check, error) {
@@ -72,11 +81,19 @@ func (m MonitorSpec) toCheck() (check.Check, error) {
 	if err != nil {
 		return check.Check{}, fmt.Errorf("monitor %q timeout: %w", m.Name, err)
 	}
+	var tlsExpiryWarning time.Duration
+	if value := strings.TrimSpace(m.TLSExpiryWarning); value != "" {
+		tlsExpiryWarning, err = time.ParseDuration(value)
+		if err != nil {
+			return check.Check{}, fmt.Errorf("monitor %q tls_expiry_warning: %w", m.Name, err)
+		}
+	}
 	return check.Check{Name: strings.TrimSpace(m.Name), Kind: m.Kind, Target: strings.TrimSpace(m.Target),
 		Vantage: m.Vantage, Interval: interval, Timeout: timeout, Quorum: m.Quorum,
 		Prober: m.Prober, Probers: append([]string(nil), m.Probers...), ExpectStatus: append([]int(nil), m.ExpectStatus...), ExpectBody: m.ExpectBody,
 		Send: m.Send, HTTPMethod: m.HTTPMethod, HTTPHeaders: cloneStrings(m.HTTPHeaders),
-		HTTPBody: m.HTTPBody, ServerName: m.ServerName, StartTLS: m.StartTLS, DNSRecord: m.DNSRecord}, nil
+		HTTPBody: m.HTTPBody, ServerName: m.ServerName, StartTLS: m.StartTLS, DNSRecord: m.DNSRecord,
+		TLSExpiryWarning: tlsExpiryWarning}, nil
 }
 
 func cloneStrings(in map[string]string) map[string]string {

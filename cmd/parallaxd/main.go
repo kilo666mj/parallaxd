@@ -155,22 +155,23 @@ type proberConfig struct {
 }
 
 type checkConfig struct {
-	Name         string            `json:"name"`
-	Kind         check.Kind        `json:"kind"`
-	Target       string            `json:"target"`
-	Vantage      check.Vantage     `json:"vantage"`
-	Interval     duration          `json:"interval"`
-	Timeout      duration          `json:"timeout"`
-	Quorum       check.Quorum      `json:"quorum"`
-	ExpectStatus []int             `json:"expect_status,omitempty"`
-	ExpectBody   string            `json:"expect_body,omitempty"`
-	Send         string            `json:"send,omitempty"`
-	HTTPMethod   string            `json:"http_method,omitempty"`
-	HTTPHeaders  map[string]string `json:"http_headers,omitempty"`
-	HTTPBody     string            `json:"http_body,omitempty"`
-	ServerName   string            `json:"server_name,omitempty"`
-	StartTLS     bool              `json:"start_tls,omitempty"`
-	DNSRecord    string            `json:"dns_record,omitempty"`
+	Name             string            `json:"name"`
+	Kind             check.Kind        `json:"kind"`
+	Target           string            `json:"target"`
+	Vantage          check.Vantage     `json:"vantage"`
+	Interval         duration          `json:"interval"`
+	Timeout          duration          `json:"timeout"`
+	Quorum           check.Quorum      `json:"quorum"`
+	ExpectStatus     []int             `json:"expect_status,omitempty"`
+	ExpectBody       string            `json:"expect_body,omitempty"`
+	Send             string            `json:"send,omitempty"`
+	HTTPMethod       string            `json:"http_method,omitempty"`
+	HTTPHeaders      map[string]string `json:"http_headers,omitempty"`
+	HTTPBody         string            `json:"http_body,omitempty"`
+	ServerName       string            `json:"server_name,omitempty"`
+	StartTLS         bool              `json:"start_tls,omitempty"`
+	DNSRecord        string            `json:"dns_record,omitempty"`
+	TLSExpiryWarning duration          `json:"tls_expiry_warning,omitempty"`
 
 	// Prober is the preferred owner. Empty uses rendezvous hashing; dynamic
 	// assignment temporarily moves checks away from unavailable owners.
@@ -186,6 +187,7 @@ func (c checkConfig) toCheck() check.Check {
 		Prober:     c.Prober,
 		HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders, HTTPBody: c.HTTPBody,
 		ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
+		TLSExpiryWarning: time.Duration(c.TLSExpiryWarning),
 	}
 }
 

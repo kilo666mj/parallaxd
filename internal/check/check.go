@@ -117,6 +117,12 @@ type Check struct {
 	ServerName  string            `json:"server_name,omitempty"`
 	StartTLS    bool              `json:"start_tls,omitempty"`
 	DNSRecord   string            `json:"dns_record,omitempty"`
+
+	// TLSExpiryWarning makes an otherwise valid TLS certificate a failed
+	// check when it has this much lifetime or less remaining. Zero disables
+	// proactive expiry checks; the TLS handshake still rejects expired and
+	// not-yet-valid certificates.
+	TLSExpiryWarning time.Duration `json:"tls_expiry_warning,omitempty"`
 }
 
 // Quorum is the agreement rule.
@@ -163,6 +169,10 @@ func (c Check) Validate() error {
 		return fmt.Errorf("check %q: http_body exceeds 32 KiB", c.Name)
 	case c.Kind == KindDNS && c.DNSRecord != "" && c.DNSRecord != "A" && c.DNSRecord != "AAAA" && c.DNSRecord != "MX" && c.DNSRecord != "TXT":
 		return fmt.Errorf("check %q: dns_record must be A, AAAA, MX or TXT", c.Name)
+	case c.TLSExpiryWarning < 0:
+		return fmt.Errorf("check %q: tls_expiry_warning cannot be negative", c.Name)
+	case c.TLSExpiryWarning > 0 && c.Kind != KindTLS:
+		return fmt.Errorf("check %q: tls_expiry_warning is only valid for TLS checks", c.Name)
 	case strings.TrimSpace(c.Target) == "":
 		return fmt.Errorf("check %q: target is required", c.Name)
 	case c.Vantage != VantagePublic && c.Vantage != VantageInternal:

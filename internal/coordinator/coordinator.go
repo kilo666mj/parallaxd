@@ -957,6 +957,7 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/replica", c.handleReplica)
 	mux.HandleFunc("GET /v1/ha", c.handleHAStatus)
 	mux.HandleFunc("POST /v1/ha/promote", c.handlePromote)
+	mux.HandleFunc("GET /assets/parallaxd-icon.png", c.handleIcon)
 	mux.HandleFunc("GET /", c.handleDashboard)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c.isStandby() && standbyBlocks(r) {

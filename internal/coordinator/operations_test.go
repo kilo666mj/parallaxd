@@ -284,7 +284,7 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 		t.Errorf("X-Frame-Options=%q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Active incidents", "Create silence", "History", "Monitors", "Test from eligible probers", "Revision ledger", "Access control", "/v1/history/summary", "/v1/diagnostics", "/v1/monitors", "/v1/auth/login", "/v1/auth/users", "parallaxd_csrf", "sessionStorage"} {
+	for _, want := range []string{"Active incidents", "Create silence", "History", "Monitors", "Test from eligible probers", "Revision ledger", "Access control", "/v1/history/summary", "/v1/diagnostics", "/v1/monitors", "/v1/auth/login", "/v1/auth/users", "/assets/parallaxd-icon.png", "parallaxd_csrf", "sessionStorage"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard does not contain %q", want)
 		}
@@ -296,6 +296,24 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 	}
 	if strings.Contains(body, cfg.OperatorToken) {
 		t.Fatal("dashboard embedded the configured operator token")
+	}
+}
+
+func TestDashboardServesBrandIcon(t *testing.T) {
+	c, err := New(durableConfig(t, "", &fakeNotifier{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	c.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/parallaxd-icon.png", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type=%q", got)
+	}
+	if body := rec.Body.Bytes(); len(body) < 8 || !bytes.Equal(body[:8], []byte("\x89PNG\r\n\x1a\n")) {
+		t.Fatal("icon response is not a PNG")
 	}
 }
 

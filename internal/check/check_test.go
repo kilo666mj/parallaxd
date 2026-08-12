@@ -60,6 +60,22 @@ func TestTimeoutMustBeShorterThanInterval(t *testing.T) {
 	}
 }
 
+func TestTLSExpiryWarningValidation(t *testing.T) {
+	c := valid()
+	c.TLSExpiryWarning = 15 * 24 * time.Hour
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "only valid for TLS") {
+		t.Fatalf("non-TLS expiry warning error = %v", err)
+	}
+	c.Kind = KindTLS
+	if err := c.Validate(); err != nil {
+		t.Fatalf("TLS expiry warning rejected: %v", err)
+	}
+	c.TLSExpiryWarning = -time.Hour
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("negative expiry warning error = %v", err)
+	}
+}
+
 func TestEligibleProberPoolIsCoherent(t *testing.T) {
 	c := valid()
 	c.Prober = "probe-a"
