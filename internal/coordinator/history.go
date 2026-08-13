@@ -228,14 +228,23 @@ func (c *Coordinator) loadHistory() error {
 			dropped = true
 			continue
 		}
-		before := len(c.history[observation.Check])
-		c.appendHistoryLocked(observation)
-		if before == c.historyMaxPerCheck() {
-			dropped = true
-		}
+		// The journal is normally ordered, but restoration must also tolerate
+		// records copied or merged out of order. Append in O(1) here; inserting
+		// and copying the complete per-check slice for every line makes startup
+		// quadratic on a mature history file.
+		c.history[observation.Check] = append(c.history[observation.Check], observation)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan history file: %w", err)
+	}
+	max := c.historyMaxPerCheck()
+	for name, items := range c.history {
+		sort.SliceStable(items, func(i, j int) bool { return items[i].ReceivedAt.Before(items[j].ReceivedAt) })
+		if len(items) > max {
+			items = items[len(items)-max:]
+			dropped = true
+		}
+		c.history[name] = append([]Observation(nil), items...)
 	}
 	if dropped {
 		return c.compactHistoryLocked()
