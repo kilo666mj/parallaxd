@@ -171,15 +171,19 @@ func reconcile(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if current == nil {
-		pair, err := wgnet.LoadKeyPair(*stateDir)
-		if err != nil {
-			return err
-		}
-		next.PrivateKey, next.PublicKey = pair.PrivateKey, pair.PublicKey
-		next, _, err = wgnet.Reconcile(&next, topology)
-		changed = true
-		if err != nil {
-			return err
+		if *check {
+			changed = true
+		} else {
+			pair, err := wgnet.LoadKeyPair(*stateDir)
+			if err != nil {
+				return err
+			}
+			next.PrivateKey, next.PublicKey = pair.PrivateKey, pair.PublicKey
+			next, _, err = wgnet.Reconcile(&next, topology)
+			changed = true
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if changed && !*check {

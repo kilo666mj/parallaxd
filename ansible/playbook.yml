@@ -151,6 +151,15 @@
         dest: /usr/local/bin/parallaxd-network
         mode: "0755"
 
+    - name: Stage the encrypted-network command for check-mode validation
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../parallaxd-parallaxd-network-linux-{{ parallaxd_goarch }}"
+        dest: /tmp/parallaxd-network-check
+        mode: "0755"
+      when: ansible_check_mode
+      check_mode: false
+      changed_when: false
+
     - name: Check whether a keypair already exists
       ansible.builtin.stat:
         path: "{{ parallaxd_key_dir }}/private"
@@ -391,7 +400,7 @@
     - name: Ensure this host has a persistent WireGuard keypair
       ansible.builtin.command:
         cmd: >-
-          /usr/local/bin/parallaxd-network key-init
+          {{ '/tmp/parallaxd-network-check' if ansible_check_mode else '/usr/local/bin/parallaxd-network' }} key-init
           --state {{ parallaxd_network_state_dir }}
           --import-private {{ parallaxd_key_dir }}/ha-wg-private
           {{ '--check' if ansible_check_mode else '' }}
@@ -424,7 +433,7 @@
     - name: Reconcile private WireGuard state
       ansible.builtin.command:
         cmd: >-
-          /usr/local/bin/parallaxd-network reconcile
+          {{ '/tmp/parallaxd-network-check' if ansible_check_mode else '/usr/local/bin/parallaxd-network' }} reconcile
           --state {{ parallaxd_network_state_dir }}
           --topology {{ '/tmp/parallaxd-network-topology.json' if ansible_check_mode else parallaxd_network_topology_file }}
           {{ '--check' if ansible_check_mode else '' }}
@@ -432,6 +441,14 @@
       changed_when: parallaxd_network_reconcile.stdout is search('"changed":true')
       no_log: true
       check_mode: false
+
+    - name: Remove the check-mode network command
+      ansible.builtin.file:
+        path: /tmp/parallaxd-network-check
+        state: absent
+      when: ansible_check_mode
+      check_mode: false
+      changed_when: false
 
     - name: Validate, install, and activate reconciled WireGuard configuration
       ansible.builtin.command:
