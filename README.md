@@ -1081,6 +1081,11 @@ instead of finishing this.
 
 ## Building
 
+Tagged releases (`vX.Y.Z`) publish static Linux binaries for amd64 and arm64
+for the coordinator, prober, watcher, and HA command, together with
+`SHA256SUMS`. Release notes are generated from the commits since the previous
+tag.
+
 ```sh
 go build ./...
 go test -race ./...
