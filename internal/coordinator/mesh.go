@@ -145,7 +145,7 @@ func (c *Coordinator) handleMesh(w http.ResponseWriter, r *http.Request) {
 	// cannot provide usable monitoring evidence. Keep it silent until its mesh
 	// view recovers; otherwise each isolated report clears the silence and the
 	// watchdog reopens it on the next tick.
-	if !c.isolatedProbers()[report.Prober] && c.markReporting(report.Prober) {
+	if !c.isolatedProbers()[report.Prober] && c.markMeshReporting(report.Prober) {
 		c.emit(r.Context(), Alert{
 			Prober: report.Prober,
 			Kind:   KindReporting,

@@ -268,6 +268,27 @@ func TestSilenceAlertsOnceThenReportsRecovery(t *testing.T) {
 	}
 }
 
+func TestMeshRecoveryGetsBoundedAssignmentGrace(t *testing.T) {
+	h := newWatchHarness(t, Config{Checks: []check.Check{namedCheck("svc")}})
+	h.report("svc", check.StatusUp)
+	h.clk.advance(4 * time.Minute)
+	h.coord.CheckStaleness(t.Context())
+
+	owner := h.assignee("svc")
+	if !h.coord.markMeshReporting(owner) {
+		t.Fatal("mesh recovery did not clear the silent owner")
+	}
+	if stale := h.coord.staleChecks(); len(stale) != 0 {
+		t.Fatalf("check remained stale during assignment recovery grace: %v", stale)
+	}
+
+	// Mesh liveness alone must not conceal a scheduler that never resumes.
+	h.clk.advance(h.coord.staleAfter(namedCheck("svc")) + time.Second)
+	if stale := h.coord.staleChecks(); len(stale) != 1 {
+		t.Fatalf("mesh-only recovery grace did not expire: %v", stale)
+	}
+}
+
 // Everything is unreported the instant a process starts. Alerting on that
 // would make this the first thing anyone muted.
 func TestRestartDoesNotAlertImmediately(t *testing.T) {

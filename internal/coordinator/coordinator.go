@@ -244,6 +244,13 @@ type Coordinator struct {
 	// so a dead one produces one alert rather than one per watch tick.
 	silent map[string]bool
 
+	// recoveryStarted gives a prober restored by an authenticated mesh report
+	// one normal staleness window to fetch its preferred assignments and produce
+	// a scheduled result. Without this grace, the watchdog can silence it again
+	// before the assignment refresh loop runs, causing an endless
+	// NOT REPORTING/REPORTING oscillation.
+	recoveryStarted map[string]time.Time
+
 	// beatFailures counts consecutive failed heartbeats, so a sustained
 	// failure is reported once rather than a dropped packet being reported at
 	// all.
@@ -493,6 +500,7 @@ func New(cfg Config) (*Coordinator, error) {
 		componentStates: map[string]*entityState{},
 		lastScheduled:   map[string]time.Time{},
 		silent:          map[string]bool{},
+		recoveryStarted: map[string]time.Time{},
 		diagnostics: Diagnostics{
 			RejectedResults: map[string]uint64{},
 		},
@@ -565,7 +573,7 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 			Reason: fmt.Sprintf("%s can reach no peer; its result was not counted", r.Prober),
 		}, nil
 	}
-	if c.markReporting(r.Prober) {
+	if c.markResultReporting(r.Prober) {
 		c.emit(ctx, Alert{Prober: r.Prober, Kind: KindReporting, At: c.now(), Detail: "reporting again; preferred assignments restored"})
 	}
 

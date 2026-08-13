@@ -281,6 +281,18 @@ func (c *Coordinator) staleChecks() map[string]time.Duration {
 			}
 			st.mu.Unlock()
 		}
+		// A mesh report proves the process has returned, but not yet that it is
+		// running checks. Use the recovery time only as a bounded scheduling
+		// grace. It is not written into lastVerdict, which remains the timestamp
+		// of actual monitoring evidence.
+		if owner, ok := c.baseAssignedTo(chk); ok {
+			c.mu.Lock()
+			recovered := c.recoveryStarted[owner]
+			c.mu.Unlock()
+			if recovered.After(last) {
+				last = recovered
+			}
+		}
 
 		if silent := now.Sub(last); silent > c.staleAfter(chk) {
 			out[name] = silent
@@ -404,13 +416,25 @@ func (c *Coordinator) applySilence(
 	return out
 }
 
-func (c *Coordinator) markReporting(prober string) bool {
+func (c *Coordinator) markResultReporting(prober string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.recoveryStarted, prober)
+	if !c.silent[prober] {
+		return false
+	}
+	c.silent[prober] = false
+	return true
+}
+
+func (c *Coordinator) markMeshReporting(prober string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.silent[prober] {
 		return false
 	}
 	c.silent[prober] = false
+	c.recoveryStarted[prober] = c.now()
 	return true
 }
 
