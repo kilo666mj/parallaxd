@@ -18,7 +18,8 @@ upgrade process in [`docs/operations.md`](docs/operations.md).
 ## Deployment boundary
 
 Control traffic is authenticated and integrity-protected but is not inherently
-confidential. Deploy it only over the restricted networking or encrypted
-transport described in the README. Keep key files, webhook URLs, bootstrap
+confidential. Use the `parallaxd-network` WireGuard enrollment workflow or an
+equivalent encrypted private transport; source firewalling alone is not
+confidentiality. Keep key files, webhook URLs, bootstrap
 passwords, replication tokens, OIDC secrets, inventories, and host variables
 outside the repository.

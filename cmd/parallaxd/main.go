@@ -485,6 +485,8 @@ func loadConfig(path string) (config, error) {
 	switch {
 	case strings.TrimSpace(cfg.KeyFile) == "":
 		return config{}, errors.New("key_file is required")
+	case strings.TrimSpace(cfg.OperatorTokenFile) == "" && strings.TrimSpace(cfg.BootstrapAdmin) == "" && strings.TrimSpace(cfg.OIDC.Issuer) == "":
+		return config{}, errors.New("operator authentication is required: configure operator_token_file, bootstrap_admin, or oidc")
 	case len(cfg.Probers) == 0:
 		return config{}, errors.New("at least one prober is required")
 	}

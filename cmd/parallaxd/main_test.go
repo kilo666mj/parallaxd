@@ -27,11 +27,16 @@ func validConfigFile(t *testing.T) string {
 	if err := os.WriteFile(keyFile, []byte(wire.EncodeKey(priv)), 0600); err != nil {
 		t.Fatal(err)
 	}
+	tokenFile := filepath.Join(dir, "operator-token")
+	if err := os.WriteFile(tokenFile, []byte("test-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := map[string]any{
-		"name":            "coordinator",
-		"key_file":        keyFile,
-		"fan_out_timeout": "20s",
-		"mesh_max_age":    "3m",
+		"name":                "coordinator",
+		"key_file":            keyFile,
+		"operator_token_file": tokenFile,
+		"fan_out_timeout":     "20s",
+		"mesh_max_age":        "3m",
 		"probers": []map[string]any{
 			{"name": "a", "url": "http://127.0.0.1:1", "provider": "one", "public_key": wire.EncodeKey(pubA)},
 			{"name": "b", "url": "http://127.0.0.1:2", "provider": "two", "public_key": wire.EncodeKey(pubB)},

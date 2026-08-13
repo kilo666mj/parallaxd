@@ -90,6 +90,12 @@ func (c *Coordinator) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign in through the active coordinator", http.StatusServiceUnavailable)
 		return
 	}
+	limitKey := "oidc:" + remoteHost(r.RemoteAddr)
+	if c.loginLimited(limitKey) {
+		http.Error(w, "too many sign-in attempts", http.StatusTooManyRequests)
+		return
+	}
+	c.recordLoginFailure(limitKey)
 	provider, err := c.oidcProvider(r.Context())
 	if err != nil {
 		c.log.Error("OIDC discovery failed", "err", err)
@@ -115,9 +121,14 @@ func (c *Coordinator) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(c.oidc.attempts) >= 1024 {
-		c.oidc.mu.Unlock()
-		http.Error(w, "too many sign-in attempts", http.StatusTooManyRequests)
-		return
+		var oldestHash string
+		var oldest time.Time
+		for hash, attempt := range c.oidc.attempts {
+			if oldestHash == "" || attempt.ExpiresAt.Before(oldest) {
+				oldestHash, oldest = hash, attempt.ExpiresAt
+			}
+		}
+		delete(c.oidc.attempts, oldestHash)
 	}
 	c.oidc.attempts[secretHash(state)] = oidcAttempt{Nonce: nonce, CodeVerifier: verifier, ExpiresAt: now.Add(10 * time.Minute)}
 	c.oidc.mu.Unlock()

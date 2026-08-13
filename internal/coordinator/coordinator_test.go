@@ -174,7 +174,7 @@ func newHarness(t *testing.T, n int, q check.Quorum, providers []string) *harnes
 			t.Fatalf("Add: %v", err)
 		}
 		p, err := prober.New(prober.Config{
-			Name: name, Provider: provider, Key: priv, Keyring: ring,
+			Name: name, Provider: provider, Key: priv, Keyring: ring, CoordinatorName: "coordinator",
 		})
 		if err != nil {
 			t.Fatalf("prober.New: %v", err)

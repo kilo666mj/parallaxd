@@ -309,6 +309,19 @@ func (c *Coordinator) loginLimited(key string) bool {
 	cutoff := now.Add(-5 * time.Minute)
 	c.authMu.Lock()
 	defer c.authMu.Unlock()
+	for candidate, prior := range c.loginFailures {
+		kept := prior[:0]
+		for _, at := range prior {
+			if at.After(cutoff) {
+				kept = append(kept, at)
+			}
+		}
+		if len(kept) == 0 {
+			delete(c.loginFailures, candidate)
+		} else {
+			c.loginFailures[candidate] = kept
+		}
+	}
 	attempts := c.loginFailures[key][:0]
 	for _, at := range c.loginFailures[key] {
 		if at.After(cutoff) {
@@ -321,6 +334,10 @@ func (c *Coordinator) loginLimited(key string) bool {
 
 func (c *Coordinator) recordLoginFailure(key string) {
 	c.authMu.Lock()
+	if _, exists := c.loginFailures[key]; !exists && len(c.loginFailures) >= 4096 {
+		c.authMu.Unlock()
+		return
+	}
 	c.loginFailures[key] = append(c.loginFailures[key], c.now())
 	c.authMu.Unlock()
 }
@@ -375,10 +392,7 @@ func (c *Coordinator) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := strings.TrimSpace(body.Username)
-	remote := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(remote); err == nil {
-		remote = host
-	}
+	remote := remoteHost(r.RemoteAddr)
 	key := remote
 	if c.loginLimited(key) {
 		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
@@ -408,6 +422,13 @@ func (c *Coordinator) handleLogin(w http.ResponseWriter, r *http.Request) {
 	delete(c.loginFailures, key)
 	c.authMu.Unlock()
 	writeJSON(w, principal)
+}
+
+func remoteHost(remote string) string {
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		return host
+	}
+	return remote
 }
 
 func (c *Coordinator) handleLogout(w http.ResponseWriter, r *http.Request) {

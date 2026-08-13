@@ -19,6 +19,15 @@
       provider collapse into a single group, so a distinct-providers rule
       could never be satisfied. Set it in the inventory.
 
+- name: Fail when an internal prober has no target allowlist
+  ansible.builtin.assert:
+    that: parallaxd_allow_targets | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }} is an internal prober but parallaxd_allow_targets
+      is empty. Internal-vantage checks fail closed; explicitly list the CIDRs
+      this host is permitted to probe.
+  when: inventory_hostname in groups.get('parallaxd_internal_probers', [])
+
 - name: Deploy the prober configuration
   ansible.builtin.template:
     src: probe.json.j2

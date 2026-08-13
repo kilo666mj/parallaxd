@@ -51,6 +51,10 @@ type Config struct {
 	// one vote per — so it must be stable and unique in the fleet.
 	Name string
 
+	// CoordinatorName identifies the peer allowed to publish assignments and
+	// fleet topology. It must match the key registered in Keyring.
+	CoordinatorName string
+
 	// Provider groups probers that share a network. Quorum uses it to tell
 	// three opinions from one opinion held three times, so getting it wrong
 	// overstates the independence of an agreement.
@@ -100,6 +104,8 @@ func New(cfg Config) (*Prober, error) {
 		// Without a keyring nothing can be verified, and a prober that cannot
 		// verify must not run: it would probe on anyone's say-so.
 		return nil, fmt.Errorf("prober %q: a keyring is required to verify requests", cfg.Name)
+	case cfg.CoordinatorName == "":
+		return nil, fmt.Errorf("prober %q: coordinator name is required", cfg.Name)
 	}
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = defaultMaxConcurrent

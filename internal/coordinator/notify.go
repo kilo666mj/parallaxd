@@ -339,6 +339,9 @@ func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
+	configured := *client
+	configured.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client = &configured
 	resp, err := client.Do(req)
 	if err != nil {
 		// url.Error includes the full URL in Error(), and webhook URLs often

@@ -123,9 +123,17 @@ func (p *Prober) fetchAssignments(ctx context.Context, cfg AssignmentConfig) ([]
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("coordinator returned %s", resp.Status)
 	}
-	var checks []check.Check
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, maxRequestBytes)).Decode(&checks); err != nil {
+	var env wire.Envelope
+	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, maxRequestBytes)).Decode(&env); err != nil {
 		return nil, err
+	}
+	raw, err := p.cfg.Keyring.OpenPublishedDocument(env, p.cfg.CoordinatorName, p.cfg.Name, "assignments", p.nowFunc())
+	if err != nil {
+		return nil, fmt.Errorf("verify assignments: %w", err)
+	}
+	var checks []check.Check
+	if err := json.Unmarshal(raw, &checks); err != nil {
+		return nil, fmt.Errorf("decode assignments: %w", err)
 	}
 	for _, chk := range checks {
 		if err := chk.Validate(); err != nil {

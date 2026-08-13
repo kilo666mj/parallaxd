@@ -25,15 +25,25 @@ type fakeCoordinator struct {
 	ring    *wire.Keyring
 	server  *httptest.Server
 	peersOK bool
+	key     []byte
 }
 
-func newFakeCoordinator(t *testing.T, proberName string, pub []byte) *fakeCoordinator {
+func newFakeCoordinator(t *testing.T, p *Prober, proberName string, pub []byte) *fakeCoordinator {
 	t.Helper()
 	ring := wire.NewKeyring()
 	if err := ring.Add(proberName, pub); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	f := &fakeCoordinator{ring: ring, peersOK: true}
+	coordPub, coordPriv, err := wire.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	f := &fakeCoordinator{ring: ring, peersOK: true, key: coordPriv}
+	trusted := wire.NewKeyring()
+	if err := trusted.Add("coordinator", coordPub); err != nil {
+		t.Fatalf("Add coordinator: %v", err)
+	}
+	p.cfg.Keyring = trusted
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/peers", func(w http.ResponseWriter, _ *http.Request) {
@@ -44,7 +54,12 @@ func newFakeCoordinator(t *testing.T, proberName string, pub []byte) *fakeCoordi
 			http.Error(w, "nope", http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(peers)
+		env, err := wire.SignPublishedDocument(f.key, "coordinator", proberName, "peers", time.Now(), peers)
+		if err != nil {
+			http.Error(w, "sign", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(env)
 	})
 	mux.HandleFunc("POST /v1/mesh", func(w http.ResponseWriter, r *http.Request) {
 		var env wire.Envelope
@@ -130,7 +145,7 @@ func meshProber(t *testing.T, name string) (*Prober, []byte) {
 		t.Fatalf("Add: %v", err)
 	}
 	p, err := New(Config{Name: name, Provider: "one", Key: priv, Keyring: ring,
-		Logger: discardLogger()})
+		CoordinatorName: "coordinator", Logger: discardLogger()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -139,7 +154,7 @@ func meshProber(t *testing.T, name string) (*Prober, []byte) {
 
 func TestMeshRoundReportsReachability(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 
 	liveAddr, stopLive := listener(t)
 	defer stopLive()
@@ -183,7 +198,7 @@ func TestMeshRoundReportsReachability(t *testing.T) {
 // The signal Phase 2 is built on: a prober that can reach nothing says so.
 func TestMeshRoundReportsTotalIsolation(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 	f.setPeers([]MeshPeer{
 		{Name: "probe-b", Address: deadAddress(t)},
 		{Name: "probe-c", Address: deadAddress(t)},
@@ -209,7 +224,7 @@ func TestMeshRoundReportsTotalIsolation(t *testing.T) {
 // mean a prober is never isolated.
 func TestMeshRoundSkipsItself(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 
 	liveAddr, stopLive := listener(t)
 	defer stopLive()
@@ -235,7 +250,7 @@ func TestMeshRoundSkipsItself(t *testing.T) {
 // coordinator verifying it is the assertion.
 func TestMeshReportIsSigned(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 	f.setPeers([]MeshPeer{{Name: "probe-b", Address: deadAddress(t)}})
 
 	p.meshRound(t.Context(), MeshConfig{CoordinatorURL: f.server.URL, Timeout: time.Second})
@@ -248,7 +263,7 @@ func TestMeshReportIsSigned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	f2 := newFakeCoordinator(t, "probe-a", otherPub)
+	f2 := newFakeCoordinator(t, p, "probe-a", otherPub)
 	f2.setPeers([]MeshPeer{{Name: "probe-b", Address: deadAddress(t)}})
 	p.meshRound(t.Context(), MeshConfig{CoordinatorURL: f2.server.URL, Timeout: time.Second})
 	if len(f2.reports()) != 0 {
@@ -261,7 +276,7 @@ func TestMeshReportIsSigned(t *testing.T) {
 // coordinator's staleness watchdog covers this case instead.
 func TestMeshRoundSaysNothingWhenThePeerListIsUnavailable(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 	f.mu.Lock()
 	f.peersOK = false
 	f.mu.Unlock()
@@ -274,7 +289,7 @@ func TestMeshRoundSaysNothingWhenThePeerListIsUnavailable(t *testing.T) {
 
 func TestMeshRoundWithNoPeersReportsNothing(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 	f.setPeers(nil)
 
 	p.meshRound(t.Context(), MeshConfig{CoordinatorURL: f.server.URL, Timeout: time.Second})
@@ -301,7 +316,7 @@ func TestWatchMeshReturnsWithoutACoordinator(t *testing.T) {
 
 func TestWatchMeshStopsOnCancel(t *testing.T) {
 	p, pub := meshProber(t, "probe-a")
-	f := newFakeCoordinator(t, "probe-a", pub)
+	f := newFakeCoordinator(t, p, "probe-a", pub)
 	f.setPeers([]MeshPeer{{Name: "probe-b", Address: deadAddress(t)}})
 
 	ctx, cancel := context.WithCancel(t.Context())

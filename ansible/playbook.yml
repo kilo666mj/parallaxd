@@ -75,6 +75,7 @@
         - parallaxd
         - parallaxd-probe
         - parallaxd-watch
+        - parallaxd-network
       loop_control:
         label: "{{ item }}"
       delegate_to: localhost
@@ -104,7 +105,7 @@
         GOOS: linux
         GOARCH: "{{ item.1 }}"
       loop: >-
-        {{ ['parallaxd', 'parallaxd-probe', 'parallaxd-watch']
+        {{ ['parallaxd', 'parallaxd-probe', 'parallaxd-watch', 'parallaxd-network']
            | product(parallaxd_build_architectures) | list }}
       loop_control:
         label: "{{ item.0 }} / linux-{{ item.1 }}"
@@ -143,6 +144,12 @@
         mode: "0755"
       when: inventory_hostname in groups['parallaxd_watch'] | default([])
       register: parallaxd_watcher_binary_install
+
+    - name: Install the encrypted-network enrollment command
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../parallaxd-parallaxd-network-linux-{{ parallaxd_goarch }}"
+        dest: /usr/local/bin/parallaxd-network
+        mode: "0755"
 
     - name: Check whether a keypair already exists
       ansible.builtin.stat:
@@ -373,39 +380,29 @@
           the wg-parallaxd overlay.
       when: inventory_hostname in parallaxd_internal_prober_hosts
 
-    - name: Generate the dedicated parallaxd WireGuard keypair
-      ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail;
-          umask 077;
-          wg genkey | tee {{ parallaxd_key_dir }}/ha-wg-private |
-          wg pubkey > {{ parallaxd_key_dir }}/ha-wg-public
-        executable: /bin/bash
-        creates: "{{ parallaxd_key_dir }}/ha-wg-private"
-      no_log: true
-
-    - name: Secure the parallaxd WireGuard private key
+    - name: Create private encrypted-network state directory
       ansible.builtin.file:
-        path: "{{ parallaxd_key_dir }}/ha-wg-private"
+        path: "{{ parallaxd_network_state_dir }}"
+        state: directory
         owner: root
         group: root
-        mode: "0400"
+        mode: "0700"
 
-    - name: Read this host's parallaxd WireGuard private key
-      ansible.builtin.slurp:
-        src: "{{ parallaxd_key_dir }}/ha-wg-private"
-      register: parallaxd_ha_wireguard_private_raw
+    - name: Ensure this host has a persistent WireGuard keypair
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/parallaxd-network key-init
+          --state {{ parallaxd_network_state_dir }}
+          --import-private {{ parallaxd_key_dir }}/ha-wg-private
+          {{ '--check' if ansible_check_mode else '' }}
+      register: parallaxd_network_key_init
+      changed_when: false
       no_log: true
+      check_mode: false
 
-    - name: Read this host's parallaxd WireGuard public key
-      ansible.builtin.slurp:
-        src: "{{ parallaxd_key_dir }}/ha-wg-public"
-      register: parallaxd_ha_wireguard_public_raw
-
-    - name: Record this host's parallaxd WireGuard public key
+    - name: Record this host's WireGuard public key
       ansible.builtin.set_fact:
-        parallaxd_ha_wireguard_public_key: >-
-          {{ parallaxd_ha_wireguard_public_raw.content | b64decode | trim }}
+        parallaxd_ha_wireguard_public_key: "{{ parallaxd_network_key_init.stdout | trim }}"
 
     - name: Resolve the other coordinator
       ansible.builtin.set_fact:
@@ -415,58 +412,46 @@
              else parallaxd_standby_hosts[0] }}
       when: inventory_hostname in parallaxd_coordinator_nodes
 
-    # In check mode template compares the candidate directly with the live
-    # destination without writing it. The normal path below still validates a
-    # temporary file before the atomic install.
-    - name: Preview parallaxd WireGuard configuration changes
+    - name: Write the non-secret desired WireGuard topology
       ansible.builtin.template:
-        src: ha-wireguard.conf.j2
-        dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
+        src: network-topology.json.j2
+        dest: "{{ '/tmp/parallaxd-network-topology.json' if ansible_check_mode else parallaxd_network_topology_file }}"
         owner: root
         group: root
-        mode: "0400"
-      when: ansible_check_mode
+        mode: "0644"
+      check_mode: false
+
+    - name: Reconcile private WireGuard state
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/parallaxd-network reconcile
+          --state {{ parallaxd_network_state_dir }}
+          --topology {{ '/tmp/parallaxd-network-topology.json' if ansible_check_mode else parallaxd_network_topology_file }}
+          {{ '--check' if ansible_check_mode else '' }}
+      register: parallaxd_network_reconcile
+      changed_when: parallaxd_network_reconcile.stdout is search('"changed":true')
       no_log: true
-      notify: Restart parallaxd WireGuard
+      check_mode: false
 
-    - name: Validate and install the parallaxd WireGuard interface
+    - name: Validate, install, and activate reconciled WireGuard configuration
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/parallaxd-network install
+          --state {{ parallaxd_network_state_dir }}
+      register: parallaxd_network_install
+      changed_when: parallaxd_network_install.stdout is search('"changed":true')
+      no_log: true
       when: not ansible_check_mode
-      block:
-        - name: Render the parallaxd WireGuard candidate
-          ansible.builtin.template:
-            src: ha-wireguard.conf.j2
-            dest: /etc/wireguard/parallaxd-cand.conf
-            owner: root
-            group: root
-            mode: "0400"
-          changed_when: false
-          no_log: true
 
-        - name: Validate the parallaxd WireGuard candidate
-          ansible.builtin.command:
-            cmd: >-
-              wg-quick strip
-              /etc/wireguard/parallaxd-cand.conf
-          changed_when: false
-          no_log: true
-
-        - name: Install the validated parallaxd WireGuard configuration
-          ansible.builtin.copy:
-            src: /etc/wireguard/parallaxd-cand.conf
-            dest: "/etc/wireguard/{{ parallaxd_ha_wireguard_interface }}.conf"
-            remote_src: true
-            owner: root
-            group: root
-            mode: "0400"
-          no_log: true
-          notify: Restart parallaxd WireGuard
-      always:
-        - name: Remove the parallaxd WireGuard candidate
-          ansible.builtin.file:
-            path: /etc/wireguard/parallaxd-cand.conf
-            state: absent
-          changed_when: false
-          no_log: true
+    - name: Remove legacy WireGuard key files after successful migration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ parallaxd_key_dir }}/ha-wg-private"
+        - "{{ parallaxd_key_dir }}/ha-wg-public"
+      when: not ansible_check_mode
+      no_log: true
 
     - name: Allow the primary to initiate the HA tunnel
       ansible.posix.firewalld:
@@ -494,27 +479,6 @@
       when:
         - inventory_hostname in parallaxd_coordinator_nodes
         - parallaxd_internal_prober_hosts | length > 0
-
-    - name: Enable forwarding through the primary internal-prober hub
-      ansible.posix.sysctl:
-        name: net.ipv4.ip_forward
-        value: "1"
-        state: present
-        sysctl_set: true
-        reload: true
-      when:
-        - inventory_hostname == groups['parallaxd_coordinator'][0]
-        - parallaxd_internal_prober_hosts | length > 0
-
-    - name: Enable and start the parallaxd WireGuard interface
-      ansible.builtin.systemd:
-        name: "wg-quick@{{ parallaxd_ha_wireguard_interface }}"
-        enabled: true
-        state: started
-        daemon_reload: true
-
-    - name: Apply parallaxd WireGuard changes before service configuration
-      ansible.builtin.meta: flush_handlers
 
     - name: Trust authenticated parallaxd tunnel traffic
       ansible.posix.firewalld:
@@ -605,12 +569,6 @@
       delay: 3
       until: parallaxd_wireguard_ping.rc == 0
 
-  handlers:
-    - name: Restart parallaxd WireGuard
-      ansible.builtin.systemd:
-        name: "wg-quick@{{ parallaxd_ha_wireguard_interface }}"
-        state: restarted
-        daemon_reload: true
 
 # The tunnel is deliberately configured before these agents start. Otherwise
 # their coordinator URL points at an interface that does not exist yet and a
@@ -635,6 +593,17 @@
   hosts: parallaxd_coordinator:parallaxd_standby
   become: true
   tasks:
+    - name: Fail when operator authentication is not configured
+      ansible.builtin.assert:
+        that:
+          - >-
+            parallaxd_operator_token | trim | length > 0 or
+            parallaxd_bootstrap_admin | trim | length > 0 or
+            parallaxd_oidc_issuer | trim | length > 0
+        fail_msg: >-
+          Configure parallaxd_operator_token, parallaxd_bootstrap_admin, or
+          parallaxd_oidc_issuer before exposing the coordinator.
+
     - name: Read prober public keys for the coordinator
       ansible.builtin.slurp:
         src: "{{ parallaxd_key_dir }}/public"

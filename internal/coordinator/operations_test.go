@@ -289,7 +289,7 @@ func TestDashboardExposesManagementControlsWithoutEmbeddingToken(t *testing.T) {
 			t.Errorf("dashboard does not contain %q", want)
 		}
 	}
-	for _, want := range []string{"incidents:i||[]", "silences:s||[]", "all=state.monitors||[]", "(state.incidents||[]).filter", "(state.silences||[]).filter", "$('history').innerHTML"} {
+	for _, want := range []string{"incidents:[]", "silences:[]", "all=state.monitors||[]", "(state.incidents||[]).filter", "(state.silences||[]).filter", "$('history').innerHTML"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard does not contain empty-collection guard %q", want)
 		}

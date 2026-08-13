@@ -213,7 +213,8 @@ func (c *Coordinator) reportMeshTransitions(ctx context.Context) {
 // Proving it costs the prober nothing: it already holds a signing key, and it
 // signs a report to this same coordinator on every mesh round.
 func (c *Coordinator) handlePeers(w http.ResponseWriter, r *http.Request) {
-	if _, ok := c.proberCaller(r); !ok {
+	caller, ok := c.proberCaller(r)
+	if !ok {
 		c.log.Warn("refused a peer-list request", "remote", r.RemoteAddr)
 		http.Error(w, "not a registered prober", http.StatusForbidden)
 		return
@@ -228,7 +229,12 @@ func (c *Coordinator) handlePeers(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, prober.MeshPeer{Name: p.Name, Address: addr})
 	}
-	writeJSON(w, out)
+	env, err := wire.SignPublishedDocument(c.cfg.Key, c.cfg.Name, caller, "peers", c.now(), out)
+	if err != nil {
+		http.Error(w, "could not sign peer list", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, env)
 }
 
 // hostPort extracts a dialable address from a prober's base URL.
@@ -250,16 +256,6 @@ func hostPort(raw string) string {
 	default:
 		return ""
 	}
-}
-
-// callerIsAProber verifies the signed credential on a read request.
-//
-// The credential is an ordinary signed document carrying a timestamp, so it
-// reuses the machinery already there rather than inventing a second scheme.
-// It expires, so a captured header cannot be replayed indefinitely.
-func (c *Coordinator) callerIsAProber(r *http.Request) bool {
-	_, ok := c.proberCaller(r)
-	return ok
 }
 
 func (c *Coordinator) proberCaller(r *http.Request) (string, bool) {

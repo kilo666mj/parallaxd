@@ -305,9 +305,17 @@ func (h *harness) getPeers(t *testing.T, srv *httptest.Server, cred string) (int
 	if resp.StatusCode != http.StatusOK {
 		return resp.StatusCode, nil
 	}
-	var peers []prober.MeshPeer
-	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+	var env wire.Envelope
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	var doc wire.PublishedDocument
+	if err := json.Unmarshal(env.Payload, &doc); err != nil {
+		t.Fatalf("decode document: %v", err)
+	}
+	var peers []prober.MeshPeer
+	if err := json.Unmarshal(doc.Data, &peers); err != nil {
+		t.Fatalf("decode peers: %v", err)
 	}
 	return resp.StatusCode, peers
 }
@@ -405,7 +413,11 @@ func TestAssignmentFeedRequiresIdentityAndFailsOverIsolation(t *testing.T) {
 		defer resp.Body.Close()
 		var got []check.Check
 		if resp.StatusCode == http.StatusOK {
-			json.NewDecoder(resp.Body).Decode(&got)
+			var env wire.Envelope
+			json.NewDecoder(resp.Body).Decode(&env)
+			var doc wire.PublishedDocument
+			json.Unmarshal(env.Payload, &doc)
+			json.Unmarshal(doc.Data, &got)
 		}
 		return resp.StatusCode, got
 	}

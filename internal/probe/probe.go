@@ -203,6 +203,14 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		// second one would produce a less specific error.
 		client = &http.Client{}
 	}
+	configured := *client
+	client = &configured
+	// Arbitrary monitor headers commonly contain API keys. Go only strips a
+	// small built-in set on cross-origin redirects, so do not follow any
+	// redirect when custom credentials are present.
+	if len(c.HTTPHeaders) > 0 {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
 	// Give the client a transport that refuses addresses this vantage may not
 	// reach. Done here rather than by validating the URL up front because the
 	// check has to happen against the resolved address, at connect time, or a

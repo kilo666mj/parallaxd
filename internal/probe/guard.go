@@ -48,15 +48,17 @@ var specialUse = []netip.Prefix{
 // probe, the host's owner says what is reachable at all, and the second must
 // not be overridable by the first.
 type Policy struct {
-	// Allow, when non-empty, is exhaustive: an address outside every prefix
-	// is refused. Empty means "anywhere the built-in rules permit", which is
-	// the right default for a prober on a public network and the wrong one
-	// for a prober sitting inside something sensitive.
+	// Allow, when non-empty, is exhaustive. Internal-vantage checks require an
+	// explicit allowlist; public checks may rely on the built-in public rules.
 	Allow []netip.Prefix
 
 	// Deny is subtracted from whatever Allow permits. Deny wins, so a narrow
 	// exclusion inside a broad allowance does what it looks like.
 	Deny []netip.Prefix
+
+	// RequireAllowForInternal makes an empty allowlist fail closed for
+	// internal-vantage checks. Production probers always enable it.
+	RequireAllowForInternal bool
 }
 
 // blockedTarget explains why an address was refused.
@@ -99,6 +101,9 @@ func (p Policy) allows(v check.Vantage, addr netip.Addr) error {
 		case inPrefixes(specialUse, addr):
 			return &blockedTarget{addr, "a public-vantage check cannot use special-use address space"}
 		}
+	}
+	if v == check.VantageInternal && p.RequireAllowForInternal && len(p.Allow) == 0 {
+		return &blockedTarget{addr, "internal-vantage probes require an explicit target allowlist"}
 	}
 
 	if pfx, ok := match(p.Deny, addr); ok {

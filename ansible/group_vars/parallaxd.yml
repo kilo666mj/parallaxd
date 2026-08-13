@@ -43,6 +43,9 @@ parallaxd_ha_replication_interval: 30s
 parallaxd_ha_replication_timeout: 2m
 parallaxd_ha_wireguard_interface: wg-parallaxd
 parallaxd_ha_wireguard_port: 51821
+parallaxd_network_state_dir: /var/lib/parallaxd/network
+parallaxd_network_topology_file: /etc/parallaxd/network-topology.json
+parallaxd_network_overlay: 10.77.0.0/24
 parallaxd_ha_primary_address: 10.77.0.1
 parallaxd_ha_standby_address: 10.77.0.2
 parallaxd_ha_primary_url: "http://{{ parallaxd_ha_primary_address }}:{{ parallaxd_coordinator_port }}"
@@ -57,18 +60,11 @@ parallaxd_coordinator_key_file: >-
 # ---------------------------------------------------------------------------
 # The security model
 #
-# Traffic is signed, not encrypted. Ed25519 both directions gives authenticity,
-# integrity and replay resistance end-to-end — and unlike TLS it survives a
-# proxy, because the signature covers the payload rather than the connection.
-# What it does not give is confidentiality: an on-path observer sees check
-# names, targets and results.
-#
-# The answer to that is the source allowlist rather than a tunnel. The set of
-# peers is small, static and known, so restricting the port to those sources
-# removes the anonymous attacker entirely, with no key material, no certificate
-# lifecycle, and no new failure mode in the alerting path. A monitoring system
-# that goes blind on a forgotten certificate renewal is a worse trade than one
-# that leaks its check names to a transit provider.
+# Ed25519 gives authenticity, integrity and replay resistance end-to-end, but
+# not confidentiality. Carry control traffic over the project-owned WireGuard
+# overlay (or another encrypted private transport). Source allowlists remain
+# defense in depth; they do not prevent an on-path observer reading targets,
+# results, or configured HTTP credentials.
 #
 # ** The allowlist must include the other PROBERS, not just the coordinator. **
 # Probers connect to each other for the mesh checks. A rule permitting only the
@@ -245,53 +241,9 @@ parallaxd_mesh_max_age: 3m
 # who actually runs each check rather than a hash that disagrees with reality.
 # Omit it and the coordinator picks by rendezvous hashing — but then nothing
 # templates it onto a prober, so nothing runs it. Set it.
-parallaxd_checks:
-  - name: website
-    prober: probe-a
-    kind: http
-    target: https://www.example.com/health
-    vantage: public
-    interval: 1m
-    timeout: 10s
-    expect_status: [200]
-    quorum: {agree: 2, of: 3, distinct_providers: true}
+parallaxd_checks: []
 
-  - name: website-tls
-    prober: probe-b
-    kind: tls
-    target: www.example.com:443
-    server_name: www.example.com
-    vantage: public
-    interval: 6h
-    timeout: 10s
-    tls_expiry_warning: 360h
-    quorum: {agree: 2, of: 3, distinct_providers: true}
-
-  - name: inbound-mail-a
-    prober: probe-c
-    kind: smtp
-    target: mx1.example.com:25
-    vantage: public
-    interval: 5m
-    timeout: 10s
-    start_tls: true
-    quorum: {agree: 2, of: 3, distinct_providers: true}
-
-  - name: inbound-mail-b
-    prober: probe-d
-    kind: smtp
-    target: mx2.example.com:25
-    vantage: public
-    interval: 5m
-    timeout: 10s
-    start_tls: true
-    quorum: {agree: 2, of: 3, distinct_providers: true}
-
-parallaxd_components:
-  - name: inbound-mail
-    description: At least one public mail exchanger accepts mail
-    checks: [inbound-mail-a, inbound-mail-b]
-    down_if: all
+parallaxd_components: []
 
 parallaxd_maintenance: []
 
@@ -308,8 +260,7 @@ parallaxd_assignment_interval: 30s
 # The host's owner decides what is reachable; the coordinator only decides what
 # is worth checking, and the second must not be able to override the first.
 #
-# Empty means "anywhere the built-in and vantage rules permit" — reasonable for
-# a prober on a public network, wrong for one that can route into a LAN. Set an
-# explicit allowlist on any internal prober.
+# Empty permits public-vantage targets under the built-in rules. Internal-
+# vantage probes fail closed unless an explicit allowlist is configured.
 parallaxd_allow_targets: []
 parallaxd_deny_targets: []

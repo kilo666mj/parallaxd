@@ -118,6 +118,9 @@ func (c Client) getJSON(ctx context.Context, path string, dst any) error {
 	if err != nil {
 		return err
 	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	return c.doJSON(req, dst)
 }
 

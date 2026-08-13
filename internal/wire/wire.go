@@ -83,6 +83,51 @@ type Envelope struct {
 	Signature []byte `json:"signature"`
 }
 
+// PublishedDocument is a signed, short-lived coordinator response. Audience
+// prevents one prober from replaying another prober's assignments, while Kind
+// prevents a valid peer list from being interpreted as another document type.
+type PublishedDocument struct {
+	Audience string          `json:"audience"`
+	Kind     string          `json:"kind"`
+	IssuedAt time.Time       `json:"issued_at"`
+	Data     json.RawMessage `json:"data"`
+}
+
+// SignPublishedDocument signs an audience-bound coordinator response.
+func SignPublishedDocument(priv ed25519.PrivateKey, publisher, audience, kind string, now time.Time, data any) (Envelope, error) {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return Envelope{}, err
+	}
+	return SignDocument(priv, publisher, PublishedDocument{Audience: audience, Kind: kind, IssuedAt: now, Data: raw})
+}
+
+// OpenPublishedDocument verifies a coordinator response and its identity,
+// audience, type, and freshness before returning the embedded data.
+func (k *Keyring) OpenPublishedDocument(e Envelope, publisher, audience, kind string, now time.Time) (json.RawMessage, error) {
+	raw, err := k.OpenDocument(e)
+	if err != nil {
+		return nil, err
+	}
+	if e.Peer != publisher {
+		return nil, fmt.Errorf("%w: expected publisher %q, got %q", ErrIdentity, publisher, e.Peer)
+	}
+	var doc PublishedDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("decode published document: %w", err)
+	}
+	if doc.Audience != audience || doc.Kind != kind {
+		return nil, fmt.Errorf("%w: document audience/type mismatch", ErrIdentity)
+	}
+	if doc.IssuedAt.After(now.Add(maxClockSkew)) {
+		return nil, ErrFromTheFuture
+	}
+	if doc.IssuedAt.Before(now.Add(-2 * time.Minute)) {
+		return nil, ErrExpired
+	}
+	return doc.Data, nil
+}
+
 // Request is the coordinator asking a prober to run a check immediately.
 type Request struct {
 	// ID is a nonce echoed in the result, so a result can only satisfy the

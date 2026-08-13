@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "name": {{ inventory_hostname | to_json }},
+  "role": {{ ('hub' if inventory_hostname in parallaxd_coordinator_nodes else 'peer') | to_json }},
+  "interface": {{ parallaxd_ha_wireguard_interface | to_json }},
+  "address": {{ ((parallaxd_address if inventory_hostname in parallaxd_internal_prober_hosts else (parallaxd_ha_standby_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_primary_address)) + '/32') | to_json }},
+  "overlay": {{ parallaxd_network_overlay | to_json }},
+  "listen_port": {{ parallaxd_ha_wireguard_port }},
+  "endpoint": {{ ((parallaxd_address + ':' + parallaxd_ha_wireguard_port|string) if inventory_hostname in parallaxd_coordinator_nodes else '') | to_json }},
+  "forward": {{ (inventory_hostname == groups['parallaxd_coordinator'][0] and parallaxd_internal_prober_hosts | length > 0) | to_json }},
+  "peers": [
+{% if inventory_hostname in parallaxd_coordinator_nodes %}
+    {
+      "name": {{ parallaxd_ha_other_coordinator | to_json }},
+      "address": {{ (parallaxd_ha_primary_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_standby_address) | to_json }},
+      "public_key": {{ hostvars[parallaxd_ha_other_coordinator]['parallaxd_ha_wireguard_public_key'] | to_json }},
+      "endpoint": {{ ((hostvars[parallaxd_standby_hosts[0]]['parallaxd_address'] + ':' + parallaxd_ha_wireguard_port|string) if inventory_hostname not in parallaxd_standby_hosts else '') | to_json }},
+      "allowed_ips": [{{ ((parallaxd_ha_primary_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_standby_address) + '/32') | to_json }}],
+      "persistent_keepalive": {{ 30 if inventory_hostname not in parallaxd_standby_hosts else 0 }}
+    }{% for host in parallaxd_internal_prober_hosts %},
+    {
+      "name": {{ host | to_json }},
+      "address": {{ hostvars[host]['parallaxd_address'] | to_json }},
+      "public_key": {{ hostvars[host]['parallaxd_ha_wireguard_public_key'] | to_json }},
+      "allowed_ips": [{{ (hostvars[host]['parallaxd_address'] + '/32') | to_json }}]
+    }{% endfor %}
+{% else %}
+    {
+      "name": {{ groups['parallaxd_coordinator'][0] | to_json }},
+      "address": {{ parallaxd_ha_primary_address | to_json }},
+      "public_key": {{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_ha_wireguard_public_key'] | to_json }},
+      "endpoint": {{ (hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] + ':' + parallaxd_ha_wireguard_port|string) | to_json }},
+      "allowed_ips": {{ (([parallaxd_ha_primary_address] + (parallaxd_internal_prober_hosts | reject('equalto', inventory_hostname) | map('extract', hostvars, 'parallaxd_address') | list)) | map('regex_replace', '$', '/32') | list) | to_json }},
+      "persistent_keepalive": 30
+    },
+    {
+      "name": {{ parallaxd_standby_hosts[0] | to_json }},
+      "address": {{ parallaxd_ha_standby_address | to_json }},
+      "public_key": {{ hostvars[parallaxd_standby_hosts[0]]['parallaxd_ha_wireguard_public_key'] | to_json }},
+      "endpoint": {{ (hostvars[parallaxd_standby_hosts[0]]['parallaxd_address'] + ':' + parallaxd_ha_wireguard_port|string) | to_json }},
+      "allowed_ips": [{{ (parallaxd_ha_standby_address + '/32') | to_json }}],
+      "persistent_keepalive": 30
+    }
+{% endif %}
+  ]
+}

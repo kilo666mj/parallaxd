@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -222,8 +223,8 @@ func run(configPath string, log *slog.Logger) error {
 
 	p, err := prober.New(prober.Config{
 		Name: cfg.Name, Provider: cfg.Provider,
-		Key: key, Keyring: ring, Logger: log,
-		Policy: probe.Policy{Allow: allow, Deny: deny},
+		Key: key, Keyring: ring, CoordinatorName: cfg.CoordinatorName, Logger: log,
+		Policy: probe.Policy{Allow: allow, Deny: deny, RequireAllowForInternal: true},
 	})
 	if err != nil {
 		return err
@@ -339,8 +340,13 @@ func loadConfig(path string) (config, error) {
 		return config{}, fmt.Errorf("read config: %w", err)
 	}
 	cfg := config{Listen: "127.0.0.1:8973", CoordinatorName: "coordinator"}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		return config{}, fmt.Errorf("parse config: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return config{}, errors.New("parse config: trailing JSON value")
 	}
 
 	switch {

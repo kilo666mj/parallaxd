@@ -104,7 +104,7 @@ func newFixture(t *testing.T) *fixture {
 
 	p, err := New(Config{
 		Name: "probe-a", Provider: "hetzner",
-		Key: proberPriv, Keyring: proberRing,
+		Key: proberPriv, Keyring: proberRing, CoordinatorName: "coordinator",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -62,12 +62,19 @@ type Export struct {
 // Export builds the published document.
 func (c *Coordinator) Export() Export {
 	m := c.Mesh()
+	checks := c.Status()
+	for i := range checks {
+		checks[i].Target = ""
+		checks[i].AssignedTo = ""
+		checks[i].InconclusiveHistory = nil
+		checks[i].LastInconclusive = ""
+	}
 	return Export{
 		Version:     exportVersion,
 		Coordinator: c.cfg.Name,
 		GeneratedAt: c.now().UTC(),
 		Components:  c.Components(),
-		Checks:      c.Status(),
+		Checks:      checks,
 		Probers:     len(c.peers),
 		Isolated:    m.Isolated,
 		Partitioned: m.Partitioned,

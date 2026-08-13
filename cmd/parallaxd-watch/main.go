@@ -14,11 +14,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -233,8 +235,13 @@ func loadConfig(path string) (config, error) {
 		return config{}, fmt.Errorf("read config: %w", err)
 	}
 	cfg := config{Listen: "0.0.0.0:8974", Name: "watch", Grace: duration(5 * time.Minute), CoordinatorName: "coordinator"}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		return config{}, fmt.Errorf("parse config: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return config{}, errors.New("parse config: trailing JSON value")
 	}
 	if time.Duration(cfg.Grace) <= 0 {
 		return config{}, errors.New("grace must be positive")

@@ -484,8 +484,8 @@ func TestExportMarksStaleChecks(t *testing.T) {
 	if got.LastKnown != string(check.StatusUp) {
 		t.Errorf("last_known = %q, want up", got.LastKnown)
 	}
-	if got.AssignedTo == "" {
-		t.Error("export does not say who was supposed to be running it")
+	if got.Target != "" || got.AssignedTo != "" {
+		t.Error("public export leaked target or fleet ownership details")
 	}
 }
 

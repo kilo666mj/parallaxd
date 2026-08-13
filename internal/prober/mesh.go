@@ -208,8 +208,16 @@ func (p *Prober) fetchPeers(ctx context.Context, cfg MeshConfig) ([]MeshPeer, er
 		return nil, fmt.Errorf("coordinator returned %s", resp.Status)
 	}
 
+	var env wire.Envelope
+	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, maxRequestBytes)).Decode(&env); err != nil {
+		return nil, fmt.Errorf("decode peer list: %w", err)
+	}
+	raw, err := p.cfg.Keyring.OpenPublishedDocument(env, p.cfg.CoordinatorName, p.cfg.Name, "peers", p.nowFunc())
+	if err != nil {
+		return nil, fmt.Errorf("verify peer list: %w", err)
+	}
 	var peers []MeshPeer
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, maxRequestBytes)).Decode(&peers); err != nil {
+	if err := json.Unmarshal(raw, &peers); err != nil {
 		return nil, fmt.Errorf("decode peer list: %w", err)
 	}
 	return peers, nil

@@ -141,6 +141,7 @@ A coordinator with probers, not peer-to-peer consensus.
 | `parallaxd` | coordinator: assigns checks, requests corroboration, applies quorum, owns alerting and deduplication |
 | `parallaxd-probe` | prober: runs checks, answers corroboration requests, **decides nothing** |
 | `parallaxd-watch` | the far end of the dead-man's switch: receives the heartbeat, alerts when it stops |
+| `parallaxd-network` | creates, enrolls, validates, and installs the encrypted WireGuard control overlay |
 
 Peer-to-peer sounds better and is where these projects die — leader election,
 split brain, and eventually a worse Raft. A coordinator being down is a
@@ -307,9 +308,10 @@ once, and an **inconclusive verdict does not clear a down** — not being able t
 confirm an outage is not evidence that it ended.
 
 An inconclusive failure is retained as a **suspect timeline** rather than
-disappearing. `GET /v1/status`, `GET /v1/export`, and `GET /v1/diagnostics`
-expose the first suspicion, latest corroboration attempt and duration, attempt
-count, and latest reason quorum could not decide. If later evidence confirms
+disappearing. Authenticated `GET /v1/status` and `GET /v1/diagnostics` expose
+the first suspicion, latest corroboration attempt and duration, attempt count,
+and latest reason quorum could not decide. The public `GET /v1/export` omits
+targets, owners, and diagnostic history. If later evidence confirms
 the outage, the alert carries both the decision time and the original
 `suspected_at`, making detection latency visible instead of rewriting the
 outage as having begun when the fleet finally agreed.
@@ -735,8 +737,9 @@ deployments that deliberately trust an issuer without that claim must opt into
 credential has administrator privileges but no intrinsic identity, so legacy
 requests must still supply `actor`. The dashboard keeps a legacy token only in
 the current tab's `sessionStorage`; it is never embedded by the coordinator.
-When no users, scoped tokens, or legacy operator token exist, protected API
-endpoints return `503` rather than becoming writable by accident.
+The production command refuses to start without operator authentication.
+Protected API endpoints require `fleet:view` even for reads; only health, the
+redacted status export, dashboard assets, and sign-in endpoints are public.
 
 No authentication method encrypts the connection. Use HTTPS, loopback, an SSH
 tunnel, or another encrypted private transport; never send a password, session,
@@ -991,20 +994,18 @@ coordinator's, so neither can be written before both keypairs exist.
 
 ### The security model
 
-**Traffic is signed, not encrypted, and the port is restricted by source.**
+**Messages are signed end-to-end; deploy the control plane over the encrypted
+WireGuard overlay.**
 
 Ed25519 plus message-specific nonce/timestamp handling gives authenticity,
 integrity and replay resistance
 end-to-end — and unlike TLS it survives a proxy, because the signature covers
-the payload rather than the connection. What it does not give is
-confidentiality: an on-path observer sees check names, targets and results.
-
-The answer to that is a firewalld source allowlist rather than a tunnel. The
-peer set is small, static and known, so restricting the port to those sources
-removes the anonymous attacker entirely — with no key material, no certificate
-lifecycle, and no new failure mode in the alerting path. *A monitoring system
-that goes blind on a forgotten certificate renewal is a worse trade than one
-that leaks its check names to a transit provider.*
+the payload rather than the connection. What signatures do not give is
+confidentiality: an on-path observer otherwise sees check names, targets,
+results, and configured HTTP headers. WireGuard supplies that missing property
+without adding certificate expiry or a CA to the monitoring path. Source
+firewall rules remain defense in depth; they are not a substitute for
+encryption.
 
 > **The allowlist must include the other probers, not just the coordinator.**
 > Probers connect to each other for the mesh checks. A rule permitting only the
@@ -1013,16 +1014,74 @@ that leaks its check names to a transit provider.*
 
 The playbook builds both lists from the inventory so they cannot drift from it.
 
-If a prober ever ends up on a network where the source set is not static, the
-allowlist stops working and you need real transport security. Reach for
-embedded WireGuard before TLS: no expiry, no CA, and it fails closed rather
-than blinding you on a missed renewal.
+### Self-contained encrypted network enrollment
+
+`parallaxd-network` creates a hub-and-spoke WireGuard overlay without giving
+the coordinator or prober daemons network-administration privileges. Private
+keys remain in a mode-`0600` local state file. The two exchanged JSON artifacts
+contain public keys and addressing only.
+
+Initialize the publicly reachable coordinator hub:
+
+```sh
+parallaxd-network hub-init \
+  --state /var/lib/parallaxd/network \
+  --endpoint status.example.com:51821 \
+  --address 10.77.0.1/24 --overlay 10.77.0.0/24
+```
+
+Copy only `invitation.json` to a prober, then initialize it with an unused
+overlay address:
+
+```sh
+parallaxd-network peer-init \
+  --state /var/lib/parallaxd/network \
+  --invitation invitation.json \
+  --name probe-a --address 10.77.0.10/24
+```
+
+Return only the generated `enrollment.json` to the hub and authorize it:
+
+```sh
+parallaxd-network authorize \
+  --state /var/lib/parallaxd/network \
+  --request enrollment.json
+```
+
+On each node, inspect a rendered configuration if desired, then explicitly
+cross the privilege boundary to install it:
+
+```sh
+parallaxd-network render --state /var/lib/parallaxd/network --output ./wg-parallaxd.conf
+sudo parallaxd-network install --state /var/lib/parallaxd/network
+```
+
+`install` accepts no destination, command, route hook, or arbitrary interface
+content. It validates the generated configuration with `wg-quick strip`,
+writes only `/etc/wireguard/<interface>.conf`, and enables/restarts that exact
+systemd unit. Install `wireguard-tools` first and permit the hub's configured
+UDP port through the host/provider firewall. Peers initiate the tunnel and use
+keepalives, so they need no inbound port.
+
+The peer routes the overlay prefix through the hub. Installation enables
+persistent IP forwarding on the hub so peer-to-peer mesh checks work. Restrict
+forwarding to the dedicated WireGuard interface in the host firewall; the
+included Ansible deployment performs those host-firewall steps for its managed
+topology.
+
+Automation uses the same implementation. Ansible installs
+`parallaxd-network`, asks it to retain a local keypair, collects only public
+keys, writes a non-secret desired-topology JSON file, and runs `reconcile`
+followed by `install`. It does not template WireGuard configuration or handle
+private WireGuard keys itself. `reconcile --check` validates and reports drift
+without changing private state or the live interface.
 
 ### One check catalogue
 
 The coordinator owns the check catalogue. `prober:` is a preferred steady-state
-owner; probers fetch their current set from `GET /v1/checks`, authenticated with
-a short-lived signed credential:
+owner; probers fetch their current set from `GET /v1/checks`. Requests use a
+short-lived signed credential and responses are signed, freshness-checked, and
+bound to that specific prober:
 
 ```yaml
 parallaxd_checks:
@@ -1045,6 +1104,11 @@ every check that needs corroboration. A hard-down target may consume the full
 check timeout before producing its `down` result; the remaining time is the
 budget for returning and verifying that signed vote. Invalid combinations fail
 at startup instead of becoming silently inconclusive during an outage.
+
+Internal-vantage probing also fails closed: an internal check cannot connect
+until its prober has an explicit `allow_targets` list. Public-vantage probing
+continues to use the built-in public-address restrictions when that list is
+empty.
 
 Validate a candidate without starting listeners, restoring state, or sending
 traffic:
@@ -1082,7 +1146,7 @@ instead of finishing this.
 ## Building
 
 Tagged releases (`vX.Y.Z`) publish static Linux binaries for amd64 and arm64
-for the coordinator, prober, watcher, and HA command, together with
+for the coordinator, prober, watcher, HA, and network-enrollment commands, together with
 `SHA256SUMS`. Release notes are generated from the commits since the previous
 tag.
 
