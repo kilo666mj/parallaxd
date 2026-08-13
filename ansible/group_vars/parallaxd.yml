@@ -213,6 +213,7 @@ parallaxd_fan_out_timeout: 20s
 parallaxd_request_ttl: 30s
 parallaxd_result_max_age: 2m
 parallaxd_stale_multiplier: 3
+parallaxd_stale_grace: 30s
 parallaxd_watch_interval: 30s
 parallaxd_mesh_max_age: 3m
 
