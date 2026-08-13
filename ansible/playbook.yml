@@ -616,7 +616,8 @@
           - >-
             parallaxd_operator_token | trim | length > 0 or
             parallaxd_bootstrap_admin | trim | length > 0 or
-            parallaxd_oidc_issuer | trim | length > 0
+            parallaxd_oidc_issuer | trim | length > 0 or
+            inventory_hostname in parallaxd_standby_hosts
         fail_msg: >-
           Configure parallaxd_operator_token, parallaxd_bootstrap_admin, or
           parallaxd_oidc_issuer before exposing the coordinator.
