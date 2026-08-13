@@ -1,0 +1,315 @@
+---
+# parallaxd tunables. Override per host in host_vars/ or inventory.
+
+parallaxd_user: parallaxd
+parallaxd_group: parallaxd
+parallaxd_config_dir: /etc/parallaxd
+parallaxd_key_dir: "{{ parallaxd_config_dir }}/keys"
+parallaxd_manage_firewalld: true
+
+# Ports. The control API is reachable only from the addresses in the allowlist
+# below; there is no other listener.
+parallaxd_coordinator_port: 8972
+parallaxd_prober_port: 8973
+parallaxd_watch_port: 8974
+
+# parallaxd_address is where OTHER NODES reach this host — the service address.
+# Set it per host in the inventory, and set it to an IP.
+#
+# Deliberately not ansible_host. That is how Ansible SSHes here, which on this
+# fleet goes through a jump port and an ~/.ssh/config entry; overloading it
+# would mean choosing between a working deploy and a working control plane.
+# Two different questions, two variables.
+#
+# An IP rather than a name because DNS in the control plane is a dependency in
+# the monitoring path: if resolution fails, every prober stops submitting and
+# the staleness watchdog reports a fleet-wide prober failure — a confidently
+# wrong diagnosis of a DNS incident. firewalld rich rules take addresses
+# anyway, so a name here would need resolving somewhere regardless.
+parallaxd_address: "{{ ansible_host | default(inventory_hostname) }}"
+
+# The coordinator's address as probers reach it.
+parallaxd_coordinator_host: "{{ hostvars[groups['parallaxd_coordinator'][0]]['parallaxd_address'] }}"
+
+# Optional warm standby. The replication link has its own WireGuard interface
+# so it does not modify or depend on any host's existing VPN configuration.
+parallaxd_standby_hosts: "{{ groups['parallaxd_standby'] | default([]) }}"
+parallaxd_coordinator_nodes: >-
+  {{ (groups['parallaxd_coordinator'] | default([]))
+     + parallaxd_standby_hosts }}
+parallaxd_internal_prober_hosts: "{{ groups['parallaxd_internal_probers'] | default([]) }}"
+parallaxd_ha_replication_token: "{{ parallaxd_replication_token_secret | default('') }}"
+parallaxd_ha_replication_interval: 30s
+parallaxd_ha_replication_timeout: 2m
+parallaxd_ha_wireguard_interface: wg-parallaxd
+parallaxd_ha_wireguard_port: 51821
+parallaxd_ha_primary_address: 10.77.0.1
+parallaxd_ha_standby_address: 10.77.0.2
+parallaxd_ha_primary_url: "http://{{ parallaxd_ha_primary_address }}:{{ parallaxd_coordinator_port }}"
+parallaxd_coordinator_url: >-
+  {{ ('http://' + parallaxd_ha_primary_address + ':' + parallaxd_coordinator_port|string)
+     if inventory_hostname in parallaxd_internal_prober_hosts
+     else ('http://' + parallaxd_coordinator_host + ':' + parallaxd_coordinator_port|string) }}
+parallaxd_coordinator_key_file: >-
+  {{ parallaxd_key_dir + ('/coordinator-private'
+     if inventory_hostname in parallaxd_standby_hosts else '/private') }}
+
+# ---------------------------------------------------------------------------
+# The security model
+#
+# Traffic is signed, not encrypted. Ed25519 both directions gives authenticity,
+# integrity and replay resistance end-to-end — and unlike TLS it survives a
+# proxy, because the signature covers the payload rather than the connection.
+# What it does not give is confidentiality: an on-path observer sees check
+# names, targets and results.
+#
+# The answer to that is the source allowlist rather than a tunnel. The set of
+# peers is small, static and known, so restricting the port to those sources
+# removes the anonymous attacker entirely, with no key material, no certificate
+# lifecycle, and no new failure mode in the alerting path. A monitoring system
+# that goes blind on a forgotten certificate renewal is a worse trade than one
+# that leaks its check names to a transit provider.
+#
+# ** The allowlist must include the other PROBERS, not just the coordinator. **
+# Probers connect to each other for the mesh checks. A rule permitting only the
+# coordinator would break every mesh check, and — because reaching no peer is
+# how isolation is defined — would silently suppress the entire fleet.
+# ---------------------------------------------------------------------------
+
+# Sources permitted to reach a prober's control port: the coordinator, plus
+# every other prober. Built from the inventory so it cannot drift from it.
+#
+# The outer parentheses matter. In Jinja `|` binds tighter than `+`, so
+# `a + b | map(...)` is `a + (b | map(...))` — which concatenated the
+# coordinator group RAW with the mapped probers and handed firewalld a
+# hostname. Group the concatenation before piping it.
+parallaxd_prober_allow_sources: >-
+  {{ (([parallaxd_ha_primary_address, parallaxd_ha_standby_address]
+       if inventory_hostname in parallaxd_internal_prober_hosts
+       else (groups['parallaxd_coordinator'] | default([])
+             | map('extract', hostvars, 'parallaxd_address') | list))
+      + (groups['parallaxd_probers'] | default([])
+         | map('extract', hostvars, 'parallaxd_address') | list)) | unique | list }}
+
+# Sources permitted to reach the coordinator's port: every prober.
+parallaxd_coordinator_allow_sources: >-
+  {{ (groups['parallaxd_probers'] | default([])
+      | map('extract', hostvars, 'parallaxd_address') | list)
+     + ([parallaxd_ha_standby_address]
+        if parallaxd_standby_hosts | length > 0 else []) }}
+
+# ---------------------------------------------------------------------------
+# Coordinator
+# ---------------------------------------------------------------------------
+
+parallaxd_listen: "0.0.0.0:{{ parallaxd_coordinator_port }}"
+
+# The dead-man's switch. Derived from the watcher group rather than set by
+# hand: parallaxd-watch is part of this project precisely so the mechanism does
+# not depend on someone else's service.
+#
+# The watcher must be on a DIFFERENT PROVIDER from the coordinator — not a
+# different company, a different failure domain. On the same host it dies with
+# what it is watching, which is the one thing it must not do.
+#
+# The watch is mutual without a second channel: the watcher alerts when the
+# coordinator stops checking in, and the coordinator alerts (KindUnwatched)
+# when it can no longer deliver here. Either dying alone is reported.
+parallaxd_heartbeat_url: >-
+  {{ ('http://' + hostvars[groups['parallaxd_watch'][0]]['parallaxd_address']
+      + ':' + parallaxd_watch_port|string + '/v1/heartbeat')
+     if (groups['parallaxd_watch'] | default([])) | length > 0 else '' }}
+parallaxd_heartbeat_interval: 1m
+parallaxd_heartbeat_headers: {}
+
+# ---------------------------------------------------------------------------
+# Watcher
+# ---------------------------------------------------------------------------
+
+parallaxd_watch_listen: "0.0.0.0:{{ parallaxd_watch_port }}"
+
+# Five missed beats at the default interval. Tighter and one lost packet pages
+# someone; looser and a dead coordinator goes unnoticed for longer than most
+# outages last.
+parallaxd_watch_grace: 5m
+parallaxd_watch_check_interval: 30s
+
+# The watcher's own alert destination. It must not depend on the coordinator
+# being up — a watcher that alerted through the thing it watches would be
+# silent in exactly the case it exists for. A self-hosted chat webhook is fine
+# as long as it does not run on the coordinator host.
+#
+# Fails loudly if unset: parallaxd-watch warns at startup rather than coming up
+# looking healthy.
+parallaxd_watch_webhook: "{{ parallaxd_webhook }}"
+parallaxd_watch_webhook_headers: "{{ parallaxd_webhook_headers }}"
+parallaxd_watch_webhook_username: "{{ parallaxd_webhook_username }}"
+parallaxd_watch_webhook_channel: "{{ parallaxd_webhook_channel }}"
+parallaxd_watch_webhook_icon_url: "{{ parallaxd_webhook_icon_url }}"
+parallaxd_watch_webhook_icon_emoji: "{{ parallaxd_webhook_icon_emoji }}"
+
+# Alert destination. The log always gets the alert; this is additional, so a
+# webhook that is down costs the integration and not the record.
+#
+# Set the real value in a gitignored group_vars/all.yml, NOT in host_vars.
+# The watcher runs on a different host from the coordinator and needs it too;
+# scoped to one host it silently resolves to empty on the other, and
+# parallaxd-watch comes up warning that a dead coordinator would be recorded
+# in its journal and nowhere else.
+# The value comes from a gitignored group_vars/all.yml under a DIFFERENT name.
+# Setting parallaxd_webhook itself there would lose: a named group beats the
+# implicit "all" group, so this default would clobber it and the webhook would
+# silently be empty everywhere.
+parallaxd_webhook: "{{ parallaxd_webhook_url | default('') }}"
+parallaxd_webhook_headers: {}
+parallaxd_webhook_username: parallaxd
+parallaxd_webhook_channel: parallaxd
+parallaxd_webhook_icon_url: >-
+  https://status.example.com/assets/parallaxd-icon.png
+parallaxd_webhook_icon_emoji: ""
+
+# Additional independently retried webhooks. Routes are optional: a
+# destination with no route receives every alert. Escalations fire once for an
+# active incident that remains unacknowledged past `after`.
+parallaxd_notification_destinations: []
+parallaxd_notification_routes: []
+parallaxd_escalations: []
+parallaxd_notification_retry_initial: 15s
+parallaxd_notification_retry_max: 15m
+parallaxd_notification_retry_interval: 5s
+
+# Append-only observation history. Retention and per-check limits bound both
+# query memory and the periodically compacted journal size.
+parallaxd_history_file: /var/lib/parallaxd/observations.jsonl
+parallaxd_history_retention: 720h
+parallaxd_history_max_per_check: 10000
+
+# Enables the authenticated operator API for acknowledging/resolving incidents
+# and creating/cancelling silences. Define parallaxd_operator_token_secret in a
+# gitignored or vaulted group_vars/all.yml. Empty keeps every mutation endpoint
+# disabled. Operators can use the API locally over SSH; exposing it through the
+# firewall requires deliberately adding their source address as well.
+parallaxd_operator_token: "{{ parallaxd_operator_token_secret | default('') }}"
+
+# Browser identity is provider-neutral. A bootstrap administrator is created
+# only when replicated state contains no users; keep its password in vaulted
+# group_vars. The legacy operator token remains available during migration.
+parallaxd_session_ttl: 12h
+parallaxd_bootstrap_admin: "{{ parallaxd_bootstrap_admin_name | default('') }}"
+parallaxd_bootstrap_password: "{{ parallaxd_bootstrap_admin_password | default('') }}"
+
+# Optional OpenID Connect. Local parallaxd users remain authoritative for
+# roles; the selected claim must exactly match a pre-provisioned username.
+parallaxd_oidc_issuer: ""
+parallaxd_oidc_client_id: ""
+parallaxd_oidc_client_secret: "{{ parallaxd_oidc_client_secret_secret | default('') }}"
+parallaxd_oidc_redirect_url: ""
+parallaxd_oidc_username_claim: email
+parallaxd_oidc_label: Single sign-on
+parallaxd_oidc_allow_unverified_email: false
+
+# Must exceed every corroborated check timeout. A hard-down target can consume
+# its entire probe timeout before returning a down vote, and the coordinator
+# still needs time to receive and verify the signed response. The coordinator
+# enforces at least one second of response budget at startup; five seconds here
+# leaves comfortable network and serialization headroom above the 15s checks.
+parallaxd_fan_out_timeout: 20s
+parallaxd_request_ttl: 30s
+parallaxd_result_max_age: 2m
+parallaxd_stale_multiplier: 3
+parallaxd_watch_interval: 30s
+parallaxd_mesh_max_age: 3m
+
+# Checks and components. Empty by default so a first deploy is inert: the fleet
+# comes up, the mesh converges, and nothing alerts until you have said what to
+# watch.
+#
+# One list, not two. Each check names the prober that runs it in steady state
+# via `prober:`; the coordinator gets the whole list and each prober is
+# templated only its own. Everything else happens on request, which is the
+# cost model — M probes in steady state, N only during an incident.
+#
+#   parallaxd_checks:
+#     - name: mx-smtps
+#       prober: probe-a
+#       kind: tcp
+#       target: mx.example.com:465
+#       vantage: public
+#       interval: 1m
+#       timeout: 10s
+#       quorum: {agree: 2, of: 3, distinct_providers: true}
+#       # Optional: restrict ownership, failover, and corroboration to a pool.
+#       probers: [internal-a, internal-b, internal-c]
+#
+# The coordinator honours `prober:` too, so /v1/assignments and Status() report
+# who actually runs each check rather than a hash that disagrees with reality.
+# Omit it and the coordinator picks by rendezvous hashing — but then nothing
+# templates it onto a prober, so nothing runs it. Set it.
+parallaxd_checks:
+  - name: website
+    prober: probe-a
+    kind: http
+    target: https://www.example.com/health
+    vantage: public
+    interval: 1m
+    timeout: 10s
+    expect_status: [200]
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: website-tls
+    prober: probe-b
+    kind: tls
+    target: www.example.com:443
+    server_name: www.example.com
+    vantage: public
+    interval: 6h
+    timeout: 10s
+    tls_expiry_warning: 360h
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: inbound-mail-a
+    prober: probe-c
+    kind: smtp
+    target: mx1.example.com:25
+    vantage: public
+    interval: 5m
+    timeout: 10s
+    start_tls: true
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+  - name: inbound-mail-b
+    prober: probe-d
+    kind: smtp
+    target: mx2.example.com:25
+    vantage: public
+    interval: 5m
+    timeout: 10s
+    start_tls: true
+    quorum: {agree: 2, of: 3, distinct_providers: true}
+
+parallaxd_components:
+  - name: inbound-mail
+    description: At least one public mail exchanger accepts mail
+    checks: [inbound-mail-a, inbound-mail-b]
+    down_if: all
+
+parallaxd_maintenance: []
+
+# ---------------------------------------------------------------------------
+# Probers
+# ---------------------------------------------------------------------------
+
+parallaxd_prober_listen: "0.0.0.0:{{ parallaxd_prober_port }}"
+parallaxd_mesh_interval: 30s
+parallaxd_mesh_timeout: 5s
+parallaxd_assignment_interval: 30s
+
+# Where this prober may connect, independent of what the coordinator asks for.
+# The host's owner decides what is reachable; the coordinator only decides what
+# is worth checking, and the second must not be able to override the first.
+#
+# Empty means "anywhere the built-in and vantage rules permit" — reasonable for
+# a prober on a public network, wrong for one that can route into a LAN. Set an
+# explicit allowlist on any internal prober.
+parallaxd_allow_targets: []
+parallaxd_deny_targets: []

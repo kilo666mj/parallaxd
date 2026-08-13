@@ -24,12 +24,12 @@ lifecycle, and observation history are implemented and deployed.
 The next milestone is operational assurance rather than new product surface:
 
 1. Run and record the acceptance exercise in
-   [`docs/acceptance-2026-08-11.md`](docs/acceptance-2026-08-11.md), including
+   [`docs/acceptance-example.md`](docs/acceptance-example.md), including
    private-prober failure, reassignment, alert, recovery, and persistence
    scenarios. **Completed 2026-08-11.**
 2. Rehearse the fenced standby-promotion procedure in
    [`docs/ha-drill.md`](docs/ha-drill.md). **Completed 2026-08-11; see the
-   [drill record](docs/ha-failover-2026-08-11.md).**
+   [example drill record](docs/ha-failover-example.md).**
 3. Use the guarded `parallaxd-ha` command for standby preflight and promotion.
    It refuses stale/erroring replication, unexpected role or active state,
    excess lag, queued work, and promotion without explicit positive-fence
