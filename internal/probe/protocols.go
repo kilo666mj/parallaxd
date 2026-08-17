@@ -357,6 +357,10 @@ type TLS struct {
 
 func (TLS) Kind() check.Kind { return check.KindTLS }
 func (t TLS) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
+	roots, err := rootsForCheck(c.CAFile, t.RootCAs)
+	if err != nil {
+		return check.StatusUnknown, 0, err.Error()
+	}
 	host, _, err := net.SplitHostPort(c.Target)
 	if err != nil {
 		return check.StatusUnknown, 0, fmt.Sprintf("invalid TLS target: %v", err)
@@ -372,7 +376,7 @@ func (t TLS) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 		return s, 0, d
 	}
 	defer conn.Close()
-	tc := tls.Client(conn, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: t.RootCAs})
+	tc := tls.Client(conn, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: roots})
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return check.StatusDown, time.Since(start), fmt.Sprintf("TLS handshake: %v", err)
 	}
@@ -400,6 +404,10 @@ type SMTP struct {
 
 func (SMTP) Kind() check.Kind { return check.KindSMTP }
 func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
+	roots, err := rootsForCheck(c.CAFile, s.RootCAs)
+	if err != nil {
+		return check.StatusUnknown, 0, err.Error()
+	}
 	host, _, err := net.SplitHostPort(c.Target)
 	if err != nil {
 		return check.StatusUnknown, 0, fmt.Sprintf("invalid SMTP target: %v", err)
@@ -427,7 +435,7 @@ func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP EHLO: %v", err)
 	}
 	if c.StartTLS {
-		if err := client.StartTLS(&tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: s.RootCAs}); err != nil {
+		if err := client.StartTLS(&tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: roots}); err != nil {
 			return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP STARTTLS: %v", err)
 		}
 	}

@@ -25,6 +25,10 @@ type GRPC struct {
 func (GRPC) Kind() check.Kind { return check.KindGRPC }
 
 func (g GRPC) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
+	roots, err := rootsForCheck(c.CAFile, g.RootCAs)
+	if err != nil {
+		return check.StatusUnknown, 0, err.Error()
+	}
 	dialer := guardedDialer(c.Vantage, g.Policy, g.Dialer)
 	options := []grpc.DialOption{
 		grpc.WithBlock(),
@@ -44,7 +48,7 @@ func (g GRPC) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 			name = host
 		}
 		options = append(options, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: g.RootCAs,
+			ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: roots,
 		})))
 	} else {
 		options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))

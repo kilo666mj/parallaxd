@@ -16,6 +16,7 @@ package check
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -124,6 +125,7 @@ type Check struct {
 	DNSRCode    string            `json:"dns_rcode,omitempty"`
 	GRPCService string            `json:"grpc_service,omitempty"`
 	GRPCTLS     bool              `json:"grpc_tls,omitempty"`
+	CAFile      string            `json:"ca_file,omitempty"`
 
 	// TLSExpiryWarning makes an otherwise valid TLS certificate a failed
 	// check when it has this much lifetime or less remaining. Zero disables
@@ -197,6 +199,10 @@ func (c Check) Validate() error {
 		return fmt.Errorf("check %q: grpc_service is only valid for gRPC checks", c.Name)
 	case c.GRPCTLS && c.Kind != KindGRPC:
 		return fmt.Errorf("check %q: grpc_tls is only valid for gRPC checks", c.Name)
+	case c.CAFile != "" && c.Kind != KindHTTP && c.Kind != KindTLS && c.Kind != KindSMTP && c.Kind != KindGRPC:
+		return fmt.Errorf("check %q: ca_file is only valid for HTTP, TLS, SMTP or gRPC checks", c.Name)
+	case c.CAFile != "" && !filepath.IsAbs(c.CAFile):
+		return fmt.Errorf("check %q: ca_file must be an absolute path on each prober", c.Name)
 	case c.TLSExpiryWarning < 0:
 		return fmt.Errorf("check %q: tls_expiry_warning cannot be negative", c.Name)
 	case c.TLSExpiryWarning > 0 && c.Kind != KindTLS:

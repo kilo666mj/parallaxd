@@ -31,6 +31,7 @@ package probe
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -197,6 +198,10 @@ type HTTP struct {
 func (HTTP) Kind() check.Kind { return check.KindHTTP }
 
 func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
+	roots, err := rootsForCheck(c.CAFile, nil)
+	if err != nil {
+		return check.StatusUnknown, 0, err.Error()
+	}
 	client := h.Client
 	if client == nil {
 		// No global timeout: the context already carries the check's, and a
@@ -226,6 +231,7 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 				MaxIdleConnsPerHost:   1,
 				TLSHandshakeTimeout:   10 * time.Second,
 				ResponseHeaderTimeout: 30 * time.Second,
+				TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
 			},
 		}
 	}

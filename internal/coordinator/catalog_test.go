@@ -157,12 +157,13 @@ func TestNewMonitorFieldsRoundTrip(t *testing.T) {
 	}
 	monitor.Kind, monitor.Target = check.KindGRPC, "grpc.example.com:443"
 	monitor.GRPCService, monitor.GRPCTLS = "fixture.Service", true
+	monitor.CAFile = "/etc/parallaxd/ca/internal.pem"
 	chk, err = monitor.toCheck()
 	if err != nil {
 		t.Fatal(err)
 	}
 	got = monitorFromCheck(chk)
-	if got.GRPCService != monitor.GRPCService || !got.GRPCTLS {
+	if got.GRPCService != monitor.GRPCService || !got.GRPCTLS || got.CAFile != monitor.CAFile {
 		t.Fatalf("gRPC fields did not round-trip: %+v", got)
 	}
 }

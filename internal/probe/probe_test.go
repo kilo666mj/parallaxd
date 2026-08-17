@@ -2,12 +2,15 @@ package probe
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +67,24 @@ func TestHTTPUp(t *testing.T) {
 	}
 	if !r.IsEvidence() {
 		t.Error("an up result must count as evidence")
+	}
+}
+
+func TestHTTPCustomCAFile(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "trusted")
+	}))
+	defer server.Close()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	certificate := server.Certificate()
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := httpCheck(server.URL)
+	c.CAFile = caFile
+	result := Run(t.Context(), HTTP{}, c, "probe-a", "provider-a")
+	if result.Status != check.StatusUp {
+		t.Fatalf("status=%s detail=%q", result.Status, result.Detail)
 	}
 }
 

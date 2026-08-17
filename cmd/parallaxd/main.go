@@ -175,6 +175,7 @@ type checkConfig struct {
 	DNSRCode         string            `json:"dns_rcode,omitempty"`
 	GRPCService      string            `json:"grpc_service,omitempty"`
 	GRPCTLS          bool              `json:"grpc_tls,omitempty"`
+	CAFile           string            `json:"ca_file,omitempty"`
 	TLSExpiryWarning duration          `json:"tls_expiry_warning,omitempty"`
 
 	// Prober is the preferred owner. Empty uses rendezvous hashing; dynamic
@@ -192,6 +193,7 @@ func (c checkConfig) toCheck() check.Check {
 		HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders, HTTPBody: c.HTTPBody,
 		ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
 		DNSServer: c.DNSServer, DNSRCode: c.DNSRCode, GRPCService: c.GRPCService, GRPCTLS: c.GRPCTLS,
+		CAFile:           c.CAFile,
 		TLSExpiryWarning: time.Duration(c.TLSExpiryWarning),
 	}
 }

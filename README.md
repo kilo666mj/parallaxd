@@ -287,6 +287,13 @@ encryption belong in dedicated protocol checks. As with HTTP headers, request
 payloads travel in signed check definitions and require an encrypted control
 transport if they contain sensitive material.
 
+HTTPS, raw TLS, SMTP STARTTLS, and TLS-enabled gRPC checks can set `ca_file`
+to an absolute PEM path on each eligible prober. The certificates augment the
+host trust store rather than replacing it, and the file contents never travel
+through coordinator traffic. With Ansible, define `parallaxd_ca_files` and use
+`/etc/parallaxd/ca/<name>.pem` in the monitor; the play installs the same
+read-only trust anchor on every prober.
+
 A TLS monitor can fail before its certificate expires by setting
 `tls_expiry_warning` to a Go duration. For example, `"360h"` opens the normal
 corroborated incident when the peer certificate has 15 days or less remaining:

@@ -52,6 +52,27 @@
         - "{{ parallaxd_config_dir }}"
         - "{{ parallaxd_key_dir }}"
 
+    - name: Create the prober CA directory
+      ansible.builtin.file:
+        path: "{{ parallaxd_ca_dir }}"
+        state: directory
+        owner: root
+        group: "{{ parallaxd_group }}"
+        mode: "0750"
+      when: inventory_hostname in groups['parallaxd_probers']
+
+    - name: Install additional prober trust anchors
+      ansible.builtin.copy:
+        content: "{{ item.value | trim }}\n"
+        dest: "{{ parallaxd_ca_dir }}/{{ item.key }}.pem"
+        owner: root
+        group: "{{ parallaxd_group }}"
+        mode: "0640"
+      loop: "{{ parallaxd_ca_files | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: inventory_hostname in groups['parallaxd_probers']
+
     - name: Resolve the target architecture
       ansible.builtin.set_fact:
         parallaxd_goarch: >-

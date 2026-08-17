@@ -109,6 +109,22 @@ func TestNewProtocolValidation(t *testing.T) {
 	}
 }
 
+func TestCAFileValidation(t *testing.T) {
+	c := valid()
+	c.Kind, c.CAFile = KindTLS, "relative.pem"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("relative ca_file error = %v", err)
+	}
+	c.CAFile = "/etc/parallaxd/ca/internal.pem"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid ca_file rejected: %v", err)
+	}
+	c.Kind = KindTCP
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "only valid") {
+		t.Fatalf("TCP ca_file error = %v", err)
+	}
+}
+
 func TestEligibleProberPoolIsCoherent(t *testing.T) {
 	c := valid()
 	c.Prober = "probe-a"
