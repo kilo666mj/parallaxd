@@ -37,6 +37,10 @@ type MonitorSpec struct {
 	ServerName       string            `json:"server_name,omitempty"`
 	StartTLS         bool              `json:"start_tls,omitempty"`
 	DNSRecord        string            `json:"dns_record,omitempty"`
+	DNSServer        string            `json:"dns_server,omitempty"`
+	DNSRCode         string            `json:"dns_rcode,omitempty"`
+	GRPCService      string            `json:"grpc_service,omitempty"`
+	GRPCTLS          bool              `json:"grpc_tls,omitempty"`
 	TLSExpiryWarning string            `json:"tls_expiry_warning,omitempty"`
 }
 
@@ -62,6 +66,7 @@ func monitorFromCheck(chk check.Check) MonitorSpec {
 		ExpectBody: chk.ExpectBody, Send: chk.Send, HTTPMethod: chk.HTTPMethod,
 		HTTPHeaders: cloneStrings(chk.HTTPHeaders), HTTPBody: chk.HTTPBody,
 		ServerName: chk.ServerName, StartTLS: chk.StartTLS, DNSRecord: chk.DNSRecord,
+		DNSServer: chk.DNSServer, DNSRCode: chk.DNSRCode, GRPCService: chk.GRPCService, GRPCTLS: chk.GRPCTLS,
 		TLSExpiryWarning: durationString(chk.TLSExpiryWarning)}
 }
 
@@ -93,6 +98,7 @@ func (m MonitorSpec) toCheck() (check.Check, error) {
 		Prober: m.Prober, Probers: append([]string(nil), m.Probers...), ExpectStatus: append([]int(nil), m.ExpectStatus...), ExpectBody: m.ExpectBody,
 		Send: m.Send, HTTPMethod: m.HTTPMethod, HTTPHeaders: cloneStrings(m.HTTPHeaders),
 		HTTPBody: m.HTTPBody, ServerName: m.ServerName, StartTLS: m.StartTLS, DNSRecord: m.DNSRecord,
+		DNSServer: m.DNSServer, DNSRCode: m.DNSRCode, GRPCService: m.GRPCService, GRPCTLS: m.GRPCTLS,
 		TLSExpiryWarning: tlsExpiryWarning}, nil
 }
 

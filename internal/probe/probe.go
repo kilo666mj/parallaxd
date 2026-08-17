@@ -305,6 +305,50 @@ type Banner struct {
 	Policy Policy
 }
 
+// Request probes a client-speaks-first TCP protocol with bounded input and
+// output. It intentionally does not interpret protocol state; checks that need
+// negotiation, authentication, or encryption deserve a dedicated prober.
+type Request struct {
+	Dialer *net.Dialer
+	Policy Policy
+}
+
+func (Request) Kind() check.Kind { return check.KindRequest }
+
+func (r Request) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {
+	start := time.Now()
+	conn, err := guardedDialer(c.Vantage, r.Policy, r.Dialer).DialContext(ctx, "tcp", c.Target)
+	if err != nil {
+		status, detail := classify(err)
+		return status, 0, detail
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+	if _, err := io.WriteString(conn, c.Send); err != nil {
+		status, detail := classify(err)
+		return status, 0, detail
+	}
+	buf := make([]byte, maxBodyRead)
+	total := 0
+	for total < len(buf) {
+		n, readErr := conn.Read(buf[total:])
+		total += n
+		if strings.Contains(string(buf[:total]), c.ExpectBody) {
+			return check.StatusUp, time.Since(start), fmt.Sprintf("matched %q in %d response bytes", c.ExpectBody, total)
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			status, detail := classify(readErr)
+			return status, 0, detail
+		}
+	}
+	return check.StatusDown, time.Since(start), fmt.Sprintf("response does not contain %q in first %d bytes", c.ExpectBody, total)
+}
+
 func (Banner) Kind() check.Kind { return check.KindBanner }
 
 func (b Banner) Probe(ctx context.Context, c check.Check) (check.Status, time.Duration, string) {

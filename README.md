@@ -265,10 +265,27 @@ prober reports down  ->  ask Of-1 others, concurrently, with a deadline
 | `tls` | certificate-verified TLS 1.2+ handshake, with optional expiry warning |
 | `smtp` | greeting, EHLO, optional STARTTLS and NOOP transaction |
 | `icmp` | echo request/reply; deployment grants only `CAP_NET_RAW` to the prober |
+| `request` | bounded TCP request/response with a required response substring |
+| `grpc` | standard `grpc.health.v1.Health/Check`, optionally over TLS |
+| `ntp` | correlated request/reply shape, matching originate timestamp and synchronised stratum |
 
 HTTP headers can carry authentication, but remember that control traffic is
 authenticated rather than encrypted: without a private transport, an on-path
 observer can read check definitions, including configured headers.
+
+DNS checks use the prober's resolver by default. Set `dns_server` to query a
+specific recursive or authoritative endpoint directly; UDP responses that are
+truncated are retried over TCP. Explicit-server checks can assert `dns_rcode`
+and A, AAAA, CAA, CNAME, MX, NS, SOA, SRV, or TXT content. SOA, CAA, and
+response-code assertions require an explicit server because Go's host resolver
+does not expose that wire-level information.
+
+The generic `request` check is deliberately bounded to a 32 KiB request and
+the first 64 KiB of response. It is suitable for simple client-speaks-first
+health exchanges such as Redis `PING`; negotiation, authentication, and
+encryption belong in dedicated protocol checks. As with HTTP headers, request
+payloads travel in signed check definitions and require an encrypted control
+transport if they contain sensitive material.
 
 A TLS monitor can fail before its certificate expires by setting
 `tls_expiry_warning` to a Go duration. For example, `"360h"` opens the normal

@@ -76,6 +76,39 @@ func TestTLSExpiryWarningValidation(t *testing.T) {
 	}
 }
 
+func TestNewProtocolValidation(t *testing.T) {
+	request := valid()
+	request.Kind = KindRequest
+	if err := request.Validate(); err == nil || !strings.Contains(err.Error(), "send") {
+		t.Fatalf("request without send error = %v", err)
+	}
+	request.Send, request.ExpectBody = "PING\r\n", "PONG"
+	if err := request.Validate(); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+
+	dns := valid()
+	dns.Kind, dns.Target, dns.DNSRecord = KindDNS, "example.com", "SOA"
+	if err := dns.Validate(); err == nil || !strings.Contains(err.Error(), "dns_server") {
+		t.Fatalf("SOA without explicit server error = %v", err)
+	}
+	dns.DNSServer, dns.DNSRCode = "192.0.2.53:53", "NOERROR"
+	if err := dns.Validate(); err != nil {
+		t.Fatalf("valid authoritative DNS check rejected: %v", err)
+	}
+
+	grpc := valid()
+	grpc.Kind, grpc.GRPCService, grpc.GRPCTLS = KindGRPC, "fixture.Service", true
+	if err := grpc.Validate(); err != nil {
+		t.Fatalf("valid gRPC check rejected: %v", err)
+	}
+	ntp := valid()
+	ntp.Kind, ntp.Target = KindNTP, "time.example.com"
+	if err := ntp.Validate(); err != nil {
+		t.Fatalf("valid NTP check rejected: %v", err)
+	}
+}
+
 func TestEligibleProberPoolIsCoherent(t *testing.T) {
 	c := valid()
 	c.Prober = "probe-a"

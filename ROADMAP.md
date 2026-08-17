@@ -18,6 +18,8 @@ lifecycle, and observation history are implemented and deployed.
 - provider-neutral local, OIDC, and scoped-token identity with role-based access
 - durable warm-standby replication with explicit, fenced promotion
 - assignment, rejection, queue, delivery, mesh, and HA diagnostics
+- direct authoritative/resolver DNS checks, bounded TCP request/response,
+  standard gRPC health, and NTP protocol checks
 
 ## Current work
 

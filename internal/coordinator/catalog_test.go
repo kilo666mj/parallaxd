@@ -143,6 +143,30 @@ func TestMonitorTLSExpiryWarningRoundTrips(t *testing.T) {
 	}
 }
 
+func TestNewMonitorFieldsRoundTrip(t *testing.T) {
+	monitor := testMonitor("dns-authority")
+	monitor.Kind, monitor.Target = check.KindDNS, "example.com"
+	monitor.DNSRecord, monitor.DNSServer, monitor.DNSRCode = "SOA", "192.0.2.53:53", "NOERROR"
+	chk, err := monitor.toCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := monitorFromCheck(chk)
+	if got.DNSRecord != "SOA" || got.DNSServer != "192.0.2.53:53" || got.DNSRCode != "NOERROR" {
+		t.Fatalf("DNS fields did not round-trip: %+v", got)
+	}
+	monitor.Kind, monitor.Target = check.KindGRPC, "grpc.example.com:443"
+	monitor.GRPCService, monitor.GRPCTLS = "fixture.Service", true
+	chk, err = monitor.toCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = monitorFromCheck(chk)
+	if got.GRPCService != monitor.GRPCService || !got.GRPCTLS {
+		t.Fatalf("gRPC fields did not round-trip: %+v", got)
+	}
+}
+
 func TestMonitorCatalogueReplicatesToStandby(t *testing.T) {
 	primaryCfg := durableConfig(t, filepath.Join(t.TempDir(), "primary.json"), &fakeNotifier{}, nil)
 	primaryCfg.OperatorToken = "secret"

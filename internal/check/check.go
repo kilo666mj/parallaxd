@@ -32,11 +32,14 @@ const (
 	// way, and the announcement is the difference between "something is
 	// listening on 25" and "a mail server is answering on 25" — which is
 	// exactly the failure a bare TCP check cannot see.
-	KindBanner Kind = "banner"
-	KindDNS    Kind = "dns"
-	KindTLS    Kind = "tls"
-	KindSMTP   Kind = "smtp"
-	KindICMP   Kind = "icmp"
+	KindBanner  Kind = "banner"
+	KindDNS     Kind = "dns"
+	KindTLS     Kind = "tls"
+	KindSMTP    Kind = "smtp"
+	KindICMP    Kind = "icmp"
+	KindRequest Kind = "request"
+	KindGRPC    Kind = "grpc"
+	KindNTP     Kind = "ntp"
 )
 
 // Vantage is the network path a probe must take.
@@ -117,6 +120,10 @@ type Check struct {
 	ServerName  string            `json:"server_name,omitempty"`
 	StartTLS    bool              `json:"start_tls,omitempty"`
 	DNSRecord   string            `json:"dns_record,omitempty"`
+	DNSServer   string            `json:"dns_server,omitempty"`
+	DNSRCode    string            `json:"dns_rcode,omitempty"`
+	GRPCService string            `json:"grpc_service,omitempty"`
+	GRPCTLS     bool              `json:"grpc_tls,omitempty"`
 
 	// TLSExpiryWarning makes an otherwise valid TLS certificate a failed
 	// check when it has this much lifetime or less remaining. Zero disables
@@ -157,7 +164,8 @@ func (c Check) Validate() error {
 	case strings.TrimSpace(c.Name) == "":
 		return fmt.Errorf("check name is required")
 	case c.Kind != KindTCP && c.Kind != KindHTTP && c.Kind != KindBanner &&
-		c.Kind != KindDNS && c.Kind != KindTLS && c.Kind != KindSMTP && c.Kind != KindICMP:
+		c.Kind != KindDNS && c.Kind != KindTLS && c.Kind != KindSMTP && c.Kind != KindICMP &&
+		c.Kind != KindRequest && c.Kind != KindGRPC && c.Kind != KindNTP:
 		return fmt.Errorf("check %q: unknown kind %q", c.Name, c.Kind)
 	case c.Kind == KindBanner && strings.TrimSpace(c.ExpectBody) == "":
 		// A banner check with nothing to match is a TCP check that reads a
@@ -167,8 +175,28 @@ func (c Check) Validate() error {
 			"without it, use kind %q", c.Name, KindTCP)
 	case len(c.HTTPBody) > 32<<10:
 		return fmt.Errorf("check %q: http_body exceeds 32 KiB", c.Name)
-	case c.Kind == KindDNS && c.DNSRecord != "" && c.DNSRecord != "A" && c.DNSRecord != "AAAA" && c.DNSRecord != "MX" && c.DNSRecord != "TXT":
-		return fmt.Errorf("check %q: dns_record must be A, AAAA, MX or TXT", c.Name)
+	case c.Kind == KindRequest && strings.TrimSpace(c.Send) == "":
+		return fmt.Errorf("check %q: a request check needs send data", c.Name)
+	case c.Kind == KindRequest && strings.TrimSpace(c.ExpectBody) == "":
+		return fmt.Errorf("check %q: a request check needs expect_body", c.Name)
+	case len(c.Send) > 32<<10:
+		return fmt.Errorf("check %q: send exceeds 32 KiB", c.Name)
+	case c.Kind == KindDNS && !validDNSRecord(c.DNSRecord):
+		return fmt.Errorf("check %q: dns_record must be A, AAAA, CAA, CNAME, MX, NS, SOA, SRV or TXT", c.Name)
+	case c.DNSRCode != "" && c.Kind != KindDNS:
+		return fmt.Errorf("check %q: dns_rcode is only valid for DNS checks", c.Name)
+	case c.Kind == KindDNS && c.DNSRCode != "" && c.DNSServer == "":
+		return fmt.Errorf("check %q: dns_rcode requires dns_server", c.Name)
+	case c.Kind == KindDNS && !validDNSRCode(c.DNSRCode):
+		return fmt.Errorf("check %q: dns_rcode must be NOERROR, FORMERR, SERVFAIL, NXDOMAIN, NOTIMP or REFUSED", c.Name)
+	case c.Kind == KindDNS && (c.DNSRecord == "CAA" || c.DNSRecord == "SOA") && c.DNSServer == "":
+		return fmt.Errorf("check %q: %s records require dns_server", c.Name, c.DNSRecord)
+	case c.DNSServer != "" && c.Kind != KindDNS:
+		return fmt.Errorf("check %q: dns_server is only valid for DNS checks", c.Name)
+	case c.GRPCService != "" && c.Kind != KindGRPC:
+		return fmt.Errorf("check %q: grpc_service is only valid for gRPC checks", c.Name)
+	case c.GRPCTLS && c.Kind != KindGRPC:
+		return fmt.Errorf("check %q: grpc_tls is only valid for gRPC checks", c.Name)
 	case c.TLSExpiryWarning < 0:
 		return fmt.Errorf("check %q: tls_expiry_warning cannot be negative", c.Name)
 	case c.TLSExpiryWarning > 0 && c.Kind != KindTLS:
@@ -192,6 +220,24 @@ func (c Check) Validate() error {
 		return fmt.Errorf("check %q: preferred prober %q is not in its eligible prober pool", c.Name, c.Prober)
 	}
 	return c.Quorum.Validate(c.Name)
+}
+
+func validDNSRecord(record string) bool {
+	switch record {
+	case "", "A", "AAAA", "CAA", "CNAME", "MX", "NS", "SOA", "SRV", "TXT":
+		return true
+	default:
+		return false
+	}
+}
+
+func validDNSRCode(code string) bool {
+	switch strings.ToUpper(code) {
+	case "", "NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP", "REFUSED":
+		return true
+	default:
+		return false
+	}
 }
 
 // Validate reports whether the quorum rule is satisfiable.
