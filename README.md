@@ -17,9 +17,11 @@ single viewpoint cannot establish the fact, separated viewpoints can.
 
 ## Quick start
 
-parallaxd is designed for several independently hosted probers; a meaningful
-production deployment therefore starts with at least three hosts in distinct
-failure domains. The included Ansible inventory is the shortest supported path:
+parallaxd is designed for several independently hosted probers. A meaningful
+production deployment starts with one dedicated coordinator and at least three
+probers in distinct failure domains: four hosts total. The watcher can share a
+prober host, as can the optional standby; a fourth prober adds one spare
+vantage. The included Ansible inventory is the shortest supported path:
 
 ```sh
 git clone https://github.com/kilo666mj/parallaxd.git
