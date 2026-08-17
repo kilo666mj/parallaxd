@@ -20,6 +20,8 @@ lifecycle, and observation history are implemented and deployed.
 - assignment, rejection, queue, delivery, mesh, and HA diagnostics
 - direct authoritative/resolver DNS checks, bounded TCP request/response,
   standard gRPC health, and NTP protocol checks
+- per-monitor additional certificate authorities for HTTPS, raw TLS, SMTP
+  STARTTLS, and TLS-enabled gRPC checks, installed locally on each prober
 
 ## Current work
 
@@ -50,9 +52,11 @@ The next milestone is operational assurance rather than new product surface:
    ordering, HA replication, and coordinator restart recovery. **Completed.**
 6. Follow [`docs/operations.md`](docs/operations.md) for recurring HA, watcher,
    delivery, backup-restore, version, firewall, and drift checks. Dependency
-   and vulnerability checks now run weekly. Production checks require a
-   private scheduled runner. **Repository automation completed; private runner
-   scheduling remains.**
+   and vulnerability checks now run weekly. Production health, backup,
+   delivery, and drift checks run from site-managed hosts so the public
+   repository neither needs private connectivity nor holds fleet credentials.
+   **Repository automation and the site-execution model are documented; the
+   private infrastructure defines its own schedule.**
 
 New check kinds and reporting features should be driven by operational need.
 The guiding principle remains to make existing checks easy to trust, operate,
