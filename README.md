@@ -927,8 +927,11 @@ Failover is an operator procedure:
      -d '{"actor":"alice","confirm_primary_fenced":true}'
    ```
 
-4. Move the coordinator service address (VIP, load balancer, or DNS) to the
-   promoted host and verify prober submissions and pending-alert delivery.
+4. Move the coordinator service entry point (VIP, load balancer, DNS, or an
+   outbound tunnel connector) to the promoted host and verify prober
+   submissions and pending-alert delivery. When a tunnel is moved, stop and
+   verify the old connector before starting the same service tunnel on the
+   promoted host; never leave two unfenced origins attached to it.
 
 Install the operator command with `go install ./cmd/parallaxd-ha`.
 `parallaxd-ha` guards steps 2 and 3. Run its preflight before fencing, repeat

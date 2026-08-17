@@ -10,6 +10,10 @@ Run this drill in a maintenance window with console access to both hosts.
       address, DNS/VIP TTL, operator, start time, and rollback owner.
 - [ ] Confirm recent restorable backups of coordinator state, observation
       history, coordinator key, and required secret files.
+- [ ] Identify the canonical traffic entry point and its exact handoff. For an
+      outbound tunnel, confirm the promoted host has the connector credential
+      and unit installed but stopped, and that unrelated host tunnels will not
+      be changed.
 - [ ] Verify `/v1/ha` reports the expected roles, a recent successful sync, no
       replication error, and acceptable lag.
 - [ ] Verify the watcher is receiving heartbeats and probers are reporting.
@@ -50,7 +54,9 @@ primary cannot be positively fenced.
      -d '{"actor":"drill-operator","confirm_primary_fenced":true}'
    ```
 
-4. Move the coordinator service address to the promoted host.
+4. Move the coordinator service entry point to the promoted host. For an
+   outbound tunnel, independently verify the old service connector is stopped
+   before starting the same connector on the promoted host.
 
 Do not continue if promotion returns an error. Preserve both state files and
 diagnostics for investigation; never start both coordinators as primary.
