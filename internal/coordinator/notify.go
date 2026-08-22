@@ -127,27 +127,7 @@ func (a Alert) Subject() string {
 // Summary renders the alert as one line.
 func (a Alert) Summary() string {
 	var b strings.Builder
-	verb := "DOWN"
-	switch a.Kind {
-	case KindRecovered:
-		verb = "RECOVERED"
-	case KindSilent:
-		verb = "NOT REPORTING"
-	case KindReporting:
-		verb = "REPORTING"
-	case KindIsolated:
-		verb = "ISOLATED"
-	case KindRejoined:
-		verb = "REJOINED"
-	case KindUnwatched:
-		verb = "UNWATCHED"
-	case KindWatched:
-		verb = "WATCHED"
-	case KindWatchLost:
-		verb = "COORDINATOR SILENT"
-	case KindWatchRecovered:
-		verb = "COORDINATOR RETURNED"
-	}
+	verb := a.verb()
 
 	// An alert about the watch itself has no check, component or prober to
 	// name; the detail is the whole message.
@@ -216,6 +196,31 @@ func (a Alert) Summary() string {
 	}
 	a.appendEscalation(&b)
 	return b.String()
+}
+
+func (a Alert) verb() string {
+	verb := "DOWN"
+	switch a.Kind {
+	case KindRecovered:
+		verb = "RECOVERED"
+	case KindSilent:
+		verb = "NOT REPORTING"
+	case KindReporting:
+		verb = "REPORTING"
+	case KindIsolated:
+		verb = "ISOLATED"
+	case KindRejoined:
+		verb = "REJOINED"
+	case KindUnwatched:
+		verb = "UNWATCHED"
+	case KindWatched:
+		verb = "WATCHED"
+	case KindWatchLost:
+		verb = "COORDINATOR SILENT"
+	case KindWatchRecovered:
+		verb = "COORDINATOR RETURNED"
+	}
+	return verb
 }
 
 func (a Alert) appendEscalation(b *strings.Builder) {
@@ -291,33 +296,43 @@ type WebhookNotifier struct {
 	Headers map[string]string
 }
 
+type chatField struct {
+	Title string `json:"title"`
+	Value string `json:"value"`
+	Short bool   `json:"short,omitempty"`
+}
+
+type chatAttachment struct {
+	Fallback string      `json:"fallback"`
+	Color    string      `json:"color"`
+	Title    string      `json:"title,omitempty"`
+	Text     string      `json:"text,omitempty"`
+	Fields   []chatField `json:"fields,omitempty"`
+	Footer   string      `json:"footer,omitempty"`
+}
+
 func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 	summary := a.Summary()
-	type attachment struct {
-		Fallback string `json:"fallback"`
-		Color    string `json:"color"`
-		Text     string `json:"text"`
-	}
 	text := summary
-	var attachments []attachment
+	var attachments []chatAttachment
 	// Mattermost and Slack render top-level text and attachment text twice if
 	// both are populated. Presentation fields identify the chat-compatible
 	// form; fallback keeps notifications useful outside the full client.
 	if n.Username != "" || n.Channel != "" || n.IconURL != "" || n.IconEmoji != "" {
 		text = ""
-		attachments = []attachment{{Fallback: summary, Color: alertColor(a.Kind), Text: summary}}
+		attachments = []chatAttachment{buildChatAttachment(a, summary)}
 	}
 	body, err := json.Marshal(struct {
 		Alert
 		// Duplicated at the top level so a receiver that renders a single
 		// field — most chat webhooks — shows something useful without being
 		// taught this schema.
-		Text        string       `json:"text,omitempty"`
-		Username    string       `json:"username,omitempty"`
-		Channel     string       `json:"channel,omitempty"`
-		IconURL     string       `json:"icon_url,omitempty"`
-		IconEmoji   string       `json:"icon_emoji,omitempty"`
-		Attachments []attachment `json:"attachments,omitempty"`
+		Text        string           `json:"text,omitempty"`
+		Username    string           `json:"username,omitempty"`
+		Channel     string           `json:"channel,omitempty"`
+		IconURL     string           `json:"icon_url,omitempty"`
+		IconEmoji   string           `json:"icon_emoji,omitempty"`
+		Attachments []chatAttachment `json:"attachments,omitempty"`
 	}{
 		Alert: a, Text: text, Username: n.Username, Channel: n.Channel,
 		IconURL: n.IconURL, IconEmoji: n.IconEmoji, Attachments: attachments,
@@ -358,6 +373,46 @@ func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 		return fmt.Errorf("webhook returned %s", resp.Status)
 	}
 	return nil
+}
+
+func buildChatAttachment(a Alert, fallback string) chatAttachment {
+	attachment := chatAttachment{Fallback: fallback, Color: alertColor(a.Kind)}
+
+	subject := a.Subject()
+	attachment.Title = a.verb()
+	if subject != "" {
+		attachment.Title += " — " + subject
+	}
+	attachment.Text = a.Detail
+	if a.Check != "" {
+		attachment.Text = a.Verdict.Reason
+		attachment.Fields = append(attachment.Fields,
+			chatField{Title: "Target", Value: a.Target, Short: true},
+			chatField{Title: "Evidence", Value: fmt.Sprintf("%d down · %d up · %d unknown", a.Verdict.Down, a.Verdict.Up, a.Verdict.Unknown), Short: true},
+		)
+		if len(a.Verdict.Providers) > 0 {
+			attachment.Fields = append(attachment.Fields, chatField{Title: "Providers", Value: strings.Join(a.Verdict.Providers, ", "), Short: true})
+		}
+		if len(a.Verdict.Dissent) > 0 {
+			attachment.Fields = append(attachment.Fields, chatField{Title: "Dissenting probers", Value: strings.Join(a.Verdict.Dissent, ", "), Short: true})
+		}
+	} else if len(a.Members) > 0 {
+		members := make([]string, 0, len(a.Members))
+		for _, member := range a.Members {
+			members = append(members, fmt.Sprintf("%s: %s", member.Check, member.Status))
+		}
+		attachment.Fields = append(attachment.Fields, chatField{Title: "Checks", Value: strings.Join(members, "\n")})
+	}
+	if !a.At.IsZero() {
+		attachment.Fields = append(attachment.Fields, chatField{Title: "Decided", Value: a.At.UTC().Format(time.RFC3339), Short: true})
+	}
+	if !a.SuspectedAt.IsZero() && a.At.After(a.SuspectedAt) {
+		attachment.Fields = append(attachment.Fields, chatField{Title: "Detection time", Value: a.At.Sub(a.SuspectedAt).Round(time.Second).String(), Short: true})
+	}
+	if a.Escalation != "" {
+		attachment.Footer = "ESCALATION — " + a.Escalation
+	}
+	return attachment
 }
 
 func alertColor(kind Kind) string {

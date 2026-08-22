@@ -172,7 +172,7 @@ parallaxd_webhook_icon_emoji: ""
 # Additional independently retried webhooks. Routes are optional: a
 # destination with no route receives every alert. Escalations fire once for an
 # active incident that remains unacknowledged past `after`.
-parallaxd_notification_destinations: []
+parallaxd_notification_destinations: "{{ parallaxd_notification_destinations_config | default([]) }}"
 parallaxd_notification_routes: []
 parallaxd_escalations: []
 parallaxd_notification_retry_initial: 15s

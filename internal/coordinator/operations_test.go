@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/check"
+	"github.com/kilo666mj/parallaxd/internal/quorum"
 	"github.com/kilo666mj/parallaxd/internal/wire"
 )
 
@@ -388,7 +389,17 @@ func TestWebhookIncludesChatPresentation(t *testing.T) {
 		URL: srv.URL, Username: "parallaxd", Channel: "parallaxd",
 		IconEmoji: ":satellite:", IconURL: "https://example.invalid/parallaxd.png",
 	}
-	if err := n.Notify(t.Context(), Alert{Check: "svc", Kind: KindDown, At: time.Now()}); err != nil {
+	decided := time.Date(2026, 8, 22, 10, 30, 0, 0, time.FixedZone("CEST", 2*60*60))
+	alert := Alert{
+		Check: "svc", Target: "https://service.example/readyz", Kind: KindDown,
+		At: decided, SuspectedAt: decided.Add(-2 * time.Minute), Escalation: "unacknowledged",
+		Verdict: quorum.Verdict{
+			Down: 3, Up: 1, Unknown: 1,
+			Providers: []string{"hetzner", "oracle"}, Dissent: []string{"probe-c"},
+			Reason: "3 of 5 probers reported down",
+		},
+	}
+	if err := n.Notify(t.Context(), alert); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
 	for field, want := range map[string]string{
@@ -410,8 +421,30 @@ func TestWebhookIncludesChatPresentation(t *testing.T) {
 	if !ok {
 		t.Fatalf("attachment = %#v", attachments[0])
 	}
-	if attachment["color"] != "#D24B4E" || attachment["text"] == "" || attachment["fallback"] == "" {
+	if attachment["color"] != "#D24B4E" ||
+		attachment["title"] != "DOWN — svc" ||
+		attachment["text"] != "3 of 5 probers reported down" ||
+		attachment["fallback"] == "" ||
+		attachment["footer"] != "ESCALATION — unacknowledged" {
 		t.Errorf("attachment = %#v", attachment)
+	}
+	fields, ok := attachment["fields"].([]any)
+	if !ok || len(fields) != 6 {
+		t.Fatalf("fields = %#v, want target, evidence, providers, dissent, decision, and detection time", attachment["fields"])
+	}
+	wantFields := map[string]string{
+		"Target":             "https://service.example/readyz",
+		"Evidence":           "3 down · 1 up · 1 unknown",
+		"Providers":          "hetzner, oracle",
+		"Dissenting probers": "probe-c",
+		"Decided":            "2026-08-22T08:30:00Z",
+		"Detection time":     "2m0s",
+	}
+	for _, raw := range fields {
+		got := raw.(map[string]any)
+		if want, exists := wantFields[got["title"].(string)]; !exists || got["value"] != want {
+			t.Errorf("unexpected field = %#v", got)
+		}
 	}
 }
 
