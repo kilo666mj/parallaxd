@@ -25,6 +25,7 @@ import (
 	"github.com/kilo666mj/parallaxd/internal/check"
 	"github.com/kilo666mj/parallaxd/internal/coordinator"
 	"github.com/kilo666mj/parallaxd/internal/wire"
+	tintwire "github.com/kilo666mj/tintwire-go"
 )
 
 // version is overridden at link time with -X main.version=<tag>.
@@ -95,7 +96,9 @@ type config struct {
 
 type notificationDestinationConfig struct {
 	Name      string            `json:"name"`
+	Driver    string            `json:"driver,omitempty"`
 	Webhook   string            `json:"webhook"`
+	Fallback  string            `json:"fallback,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	Username  string            `json:"username,omitempty"`
 	Channel   string            `json:"channel,omitempty"`
@@ -403,21 +406,55 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		checks = append(checks, c.toCheck())
 	}
 
-	// The log always gets the alert. Webhooks are independent destinations so
-	// retrying one cannot duplicate successful deliveries to another.
-	var destinations []coordinator.NotificationDestination
+	// The log always gets the alert. A Tintwire destination and its Mattermost
+	// fallback form one logical notifier so the durable outbox cannot later
+	// duplicate an alert that the fallback already accepted.
+	destinationConfigs := make(map[string]notificationDestinationConfig)
+	fallbacks := make(map[string]string)
+	var destinationOrder []string
 	if cfg.Webhook != "" {
-		destinations = append(destinations, coordinator.NotificationDestination{Name: "webhook", Notifier: coordinator.WebhookNotifier{
-			URL: cfg.Webhook, Headers: cfg.WebhookHeaders, Username: cfg.WebhookUsername,
-			Channel: cfg.WebhookChannel, IconURL: cfg.WebhookIconURL, IconEmoji: cfg.WebhookIconEmoji,
-		}})
+		destinationConfigs["webhook"] = notificationDestinationConfig{
+			Name: "webhook", Driver: "webhook", Webhook: cfg.Webhook, Headers: cfg.WebhookHeaders,
+			Username: cfg.WebhookUsername, Channel: cfg.WebhookChannel,
+			IconURL: cfg.WebhookIconURL, IconEmoji: cfg.WebhookIconEmoji,
+		}
+		destinationOrder = append(destinationOrder, "webhook")
 	}
 	for _, destination := range cfg.NotificationDestinations {
-		destinations = append(destinations, coordinator.NotificationDestination{Name: destination.Name,
-			Notifier: coordinator.WebhookNotifier{
+		destinationConfigs[destination.Name] = destination
+		fallbacks[destination.Name] = destination.Fallback
+		destinationOrder = append(destinationOrder, destination.Name)
+	}
+	referencedFallbacks := make(map[string]bool)
+	for _, fallback := range fallbacks {
+		if fallback != "" {
+			referencedFallbacks[fallback] = true
+		}
+	}
+	var destinations []coordinator.NotificationDestination
+	for _, name := range destinationOrder {
+		if referencedFallbacks[name] {
+			continue
+		}
+		destination := destinationConfigs[name]
+		var notifier coordinator.Notifier
+		if destination.Driver == "tintwire" {
+			var options []tintwire.Option
+			if fallback := fallbacks[name]; fallback != "" {
+				options = append(options, tintwire.WithMattermostFailover(destinationConfigs[fallback].Webhook))
+			}
+			client, err := tintwire.NewFromWebhook(destination.Webhook, options...)
+			if err != nil {
+				return config{}, nil, fmt.Errorf("notification destination %q: %w", name, err)
+			}
+			notifier = coordinator.TintwireNotifier{Client: client, Channel: destination.Channel, Source: destination.Username}
+		} else {
+			notifier = coordinator.WebhookNotifier{
 				URL: destination.Webhook, Headers: destination.Headers, Username: destination.Username,
 				Channel: destination.Channel, IconURL: destination.IconURL, IconEmoji: destination.IconEmoji,
-			}})
+			}
+		}
+		destinations = append(destinations, coordinator.NotificationDestination{Name: name, Notifier: notifier})
 	}
 	escalations := make([]coordinator.EscalationPolicy, 0, len(cfg.Escalations))
 	for _, policy := range cfg.Escalations {
@@ -513,15 +550,70 @@ func loadConfig(path string) (config, error) {
 			return config{}, fmt.Errorf("webhook: %w", err)
 		}
 	}
+	knownDestinations := make(map[string]bool, len(cfg.NotificationDestinations)+1)
+	configuredDestinations := make(map[string]notificationDestinationConfig, len(cfg.NotificationDestinations)+1)
+	if cfg.Webhook != "" {
+		knownDestinations["webhook"] = true
+		configuredDestinations["webhook"] = notificationDestinationConfig{
+			Name: "webhook", Driver: "webhook", Webhook: cfg.Webhook, Headers: cfg.WebhookHeaders,
+		}
+	}
 	for _, destination := range cfg.NotificationDestinations {
-		if strings.TrimSpace(destination.Name) == "" {
+		if strings.TrimSpace(destination.Name) == "" || strings.TrimSpace(destination.Name) != destination.Name {
 			return config{}, errors.New("every notification destination needs a name")
+		}
+		if destination.Name == "default" || knownDestinations[destination.Name] {
+			return config{}, fmt.Errorf("duplicate or reserved notification destination %q", destination.Name)
+		}
+		knownDestinations[destination.Name] = true
+		configuredDestinations[destination.Name] = destination
+		if driver := notificationDriver(destination); driver != "webhook" && driver != "tintwire" {
+			return config{}, fmt.Errorf("notification destination %q has unknown driver %q", destination.Name, destination.Driver)
+		}
+		if notificationDriver(destination) == "tintwire" && len(destination.Headers) > 0 {
+			return config{}, fmt.Errorf("notification destination %q: tintwire driver cannot use custom headers", destination.Name)
 		}
 		if err := validateWebhookURL(destination.Webhook); err != nil {
 			return config{}, fmt.Errorf("notification destination %q: %w", destination.Name, err)
 		}
 	}
+	referencedFallbacks := make(map[string]bool)
+	for _, destination := range cfg.NotificationDestinations {
+		fallback := destination.Fallback
+		if fallback == "" {
+			continue
+		}
+		if strings.TrimSpace(fallback) != fallback || !knownDestinations[fallback] {
+			return config{}, fmt.Errorf("notification destination %q names unknown fallback %q", destination.Name, fallback)
+		}
+		if fallback == destination.Name {
+			return config{}, fmt.Errorf("notification destination %q cannot fall back to itself", destination.Name)
+		}
+		if notificationDriver(destination) != "tintwire" {
+			return config{}, fmt.Errorf("notification destination %q: fallback requires the tintwire driver", destination.Name)
+		}
+		fallbackDestination := configuredDestinations[fallback]
+		if notificationDriver(fallbackDestination) != "webhook" {
+			return config{}, fmt.Errorf("notification destination %q: Tintwire fallback %q must use the webhook driver", destination.Name, fallback)
+		}
+		if len(fallbackDestination.Headers) > 0 {
+			return config{}, fmt.Errorf("notification destination %q: Tintwire fallback %q cannot use custom headers", destination.Name, fallback)
+		}
+		referencedFallbacks[fallback] = true
+	}
+	for _, destination := range cfg.NotificationDestinations {
+		if referencedFallbacks[destination.Name] && destination.Fallback != "" {
+			return config{}, fmt.Errorf("fallback destination %q cannot itself declare a fallback", destination.Name)
+		}
+	}
 	return cfg, nil
+}
+
+func notificationDriver(destination notificationDestinationConfig) string {
+	if destination.Driver == "" {
+		return "webhook"
+	}
+	return destination.Driver
 }
 
 func validateWebhookURL(raw string) error {

@@ -152,6 +152,57 @@ func TestValidateConfigAcceptsNotificationRoutingAndEscalation(t *testing.T) {
 	}
 }
 
+func TestValidateConfigAcceptsNotificationFallback(t *testing.T) {
+	path := validConfigFile(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["webhook"] = "https://mattermost.example/hooks/secret"
+	doc["notification_destinations"] = []map[string]any{{
+		"name": "tintwire", "driver": "tintwire", "webhook": "https://tintwire.example/hooks/secret", "fallback": "webhook",
+	}}
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfig(path, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("validateConfig: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsUnknownNotificationFallback(t *testing.T) {
+	path := validConfigFile(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["notification_destinations"] = []map[string]any{{
+		"name": "tintwire", "driver": "tintwire", "webhook": "https://tintwire.example/hooks/secret", "fallback": "missing",
+	}}
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown fallback") {
+		t.Fatalf("unknown fallback error = %v", err)
+	}
+}
+
 func TestValidateConfigAcceptsDurableStandby(t *testing.T) {
 	path := validConfigFile(t)
 	raw, err := os.ReadFile(path)

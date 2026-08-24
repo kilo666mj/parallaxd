@@ -354,17 +354,23 @@ shows the current verdict per check.
 
 ### Alerting
 
-A `Notifier` interface with two generic implementations: a log, and a webhook
-that POSTs the alert as JSON. Anything that knows about a particular chat
-product or monitoring system belongs outside this repository — parallaxd should
-be useful to someone running none of the same infrastructure, and the webhook is
-where their own glue attaches.
+A `Notifier` interface supports the always-on log, generic JSON webhooks, and
+native Tintwire cards. Generic webhooks remain the integration seam for other
+chat products, monitoring systems, and ticket trackers.
 
 Webhook delivery is durable. Each destination is attempted independently; a
 failure enters the persisted outbox and retries with capped exponential
 backoff. Later alerts for that destination queue behind it, preserving `DOWN`
 then `RECOVERED` order without holding up healthy destinations. The legacy
 `webhook` field remains supported as a destination named `webhook`.
+
+A Tintwire destination can use a generic webhook only when its own delivery
+fails by setting `fallback` to that destination's name. The fallback is not
+also sent the alert normally. It is attempted for transport failures, HTTP
+408/429 responses, and server-side 5xx responses, but not for rejected cards,
+credentials, or channel policy. A successful fallback completes the logical
+delivery rather than causing a later duplicate when Tintwire recovers. If both
+fail, the pair is retried through the durable outbox.
 
 Slack-compatible chat presentation fields are optional on both the legacy
 webhook and named destinations: `username`, `channel`, `icon_url`, and
@@ -379,10 +385,13 @@ destination, only matching alerts go there. The log is the always-on `default`
 destination and cannot be routed away:
 
 ```json
+"webhook": "https://backup-chat.example/hooks/alerts",
 "notification_destinations": [
-  {"name":"chat", "webhook":"https://chat.example/hooks/alerts",
+  {"name":"chat", "driver":"tintwire",
+   "webhook":"https://chat.example/hooks/alerts",
    "username":"parallaxd", "channel":"parallaxd",
-   "icon_url":"https://status.example/assets/parallaxd-icon.png"},
+   "icon_url":"https://status.example/assets/parallaxd-icon.png",
+   "fallback":"webhook"},
   {"name":"pager", "webhook":"https://pager.example/v1/events",
    "headers":{"Authorization":"Bearer ..."}}
 ],

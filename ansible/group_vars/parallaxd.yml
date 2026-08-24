@@ -170,7 +170,9 @@ parallaxd_webhook_icon_url: >-
 parallaxd_webhook_icon_emoji: ""
 
 # Additional independently retried webhooks. Routes are optional: a
-# destination with no route receives every alert. Escalations fire once for an
+# destination with no route receives every alert. A destination may name
+# another webhook destination (including the legacy "webhook") as its
+# failure-only `fallback` when `driver: tintwire`. Escalations fire once for an
 # active incident that remains unacknowledged past `after`.
 parallaxd_notification_destinations: "{{ parallaxd_notification_destinations_config | default([]) }}"
 parallaxd_notification_routes: []
