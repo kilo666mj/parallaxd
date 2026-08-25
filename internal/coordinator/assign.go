@@ -21,7 +21,8 @@ import (
 //
 // The check catalogue lives in one place. Probers fetch their effective set
 // from /v1/checks, and owners that are silent or isolated are excluded until
-// they report or rejoin.
+// they report or rejoin. A silent owner that has just proved process liveness
+// through the mesh gets one bounded chance to resume its preferred work.
 func assign(checkName string, peers []Peer) (Peer, bool) {
 	var (
 		best  Peer
@@ -58,6 +59,11 @@ func (c *Coordinator) assignedTo(chk check.Check) (string, bool) {
 		return "", false
 	}
 	unavailable := c.unavailableProbers()
+	// A mesh heartbeat only restores the owner's preferred work. It must not
+	// make a still-silent prober a failover candidate for unrelated checks.
+	if unavailable[preferred] && c.meshRecoveryActive(preferred, chk) {
+		delete(unavailable, preferred)
+	}
 	if !unavailable[preferred] {
 		return preferred, true
 	}
@@ -87,6 +93,13 @@ func (c *Coordinator) unavailableProbers() map[string]bool {
 		}
 	}
 	return out
+}
+
+func (c *Coordinator) meshRecoveryActive(prober string, chk check.Check) bool {
+	c.mu.Lock()
+	recovered := c.recoveryStarted[prober]
+	c.mu.Unlock()
+	return !recovered.IsZero() && c.now().Sub(recovered) <= c.staleAfter(chk)
 }
 
 func (c *Coordinator) baseAssignedTo(chk check.Check) (string, bool) {

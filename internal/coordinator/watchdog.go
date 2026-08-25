@@ -427,13 +427,12 @@ func (c *Coordinator) markResultReporting(prober string) bool {
 	return true
 }
 
-func (c *Coordinator) markMeshReporting(prober string) bool {
+func (c *Coordinator) beginMeshRecovery(prober string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.silent[prober] {
+	if !c.silent[prober] || !c.recoveryStarted[prober].IsZero() {
 		return false
 	}
-	c.silent[prober] = false
 	c.recoveryStarted[prober] = c.now()
 	return true
 }

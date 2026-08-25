@@ -137,21 +137,15 @@ func (c *Coordinator) handleMesh(w http.ResponseWriter, r *http.Request) {
 	c.reportMeshTransitions(r.Context())
 	// Mesh reporting and scheduled probing are performed by the same prober
 	// process. A fresh, authenticated mesh report therefore proves that a
-	// previously silent owner has returned. Clear the silence here so it can
-	// receive its preferred assignments again; waiting for a check result
-	// creates a deadlock because silent owners are deliberately assigned no
-	// checks.
+	// previously silent owner can be given its preferred assignments again.
+	// It does not prove that the scheduler is producing results, so keep the
+	// NOT REPORTING state open until a scheduled result actually arrives.
 	// A mesh report proves the process is alive, but an isolated prober still
 	// cannot provide usable monitoring evidence. Keep it silent until its mesh
 	// view recovers; otherwise each isolated report clears the silence and the
 	// watchdog reopens it on the next tick.
-	if !c.isolatedProbers()[report.Prober] && c.markMeshReporting(report.Prober) {
-		c.emit(r.Context(), Alert{
-			Prober: report.Prober,
-			Kind:   KindReporting,
-			At:     c.now(),
-			Detail: "reporting again; preferred assignments restored",
-		})
+	if !c.isolatedProbers()[report.Prober] {
+		c.beginMeshRecovery(report.Prober)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }

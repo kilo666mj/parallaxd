@@ -275,17 +275,29 @@ func TestMeshRecoveryGetsBoundedAssignmentGrace(t *testing.T) {
 	h.coord.CheckStaleness(t.Context())
 
 	owner := h.assignee("svc")
-	if !h.coord.markMeshReporting(owner) {
-		t.Fatal("mesh recovery did not clear the silent owner")
+	if !h.coord.beginMeshRecovery(owner) {
+		t.Fatal("mesh recovery did not start assignment grace")
 	}
 	if stale := h.coord.staleChecks(); len(stale) != 0 {
 		t.Fatalf("check remained stale during assignment recovery grace: %v", stale)
+	}
+	if !h.coord.isSilent(owner) {
+		t.Fatal("mesh liveness closed NOT REPORTING before a check result arrived")
+	}
+	if assigned, _ := h.coord.assignedTo(namedCheck("svc")); assigned != owner {
+		t.Fatalf("assignment = %q, want recovering preferred owner %q", assigned, owner)
 	}
 
 	// Mesh liveness alone must not conceal a scheduler that never resumes.
 	h.clk.advance(h.coord.staleAfter(namedCheck("svc")) + time.Second)
 	if stale := h.coord.staleChecks(); len(stale) != 1 {
 		t.Fatalf("mesh-only recovery grace did not expire: %v", stale)
+	}
+	if assigned, _ := h.coord.assignedTo(namedCheck("svc")); assigned == owner {
+		t.Fatalf("expired mesh-only recovery left assignment with %q", owner)
+	}
+	if h.coord.beginMeshRecovery(owner) {
+		t.Fatal("repeated mesh heartbeat restarted a scheduler recovery grace")
 	}
 }
 

@@ -174,15 +174,21 @@ func TestMeshReportRestoresSilentProberAssignments(t *testing.T) {
 	if code := h.submitMesh(t, srv, preferred, map[string]bool{}); code != http.StatusAccepted {
 		t.Fatalf("POST /v1/mesh status = %d, want %d", code, http.StatusAccepted)
 	}
-	if h.coord.isSilent(preferred) {
-		t.Fatalf("authenticated mesh report did not clear silence for %q", preferred)
+	if !h.coord.isSilent(preferred) {
+		t.Fatalf("mesh report closed NOT REPORTING before %q produced a result", preferred)
 	}
 	if assigned, _ := h.coord.assignedTo(chk); assigned != preferred {
 		t.Fatalf("assignment = %q, want restored preferred owner %q", assigned, preferred)
 	}
+	if n := h.notifier.count(); n != 0 {
+		t.Fatalf("got %d alerts, want no recovery before a scheduled result", n)
+	}
+	if _, err := h.coord.Process(t.Context(), h.reportFrom(preferred, check.StatusUp)); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
 	alerts := h.notifier.all()
 	if len(alerts) != 1 || alerts[0].Kind != KindReporting || alerts[0].Prober != preferred {
-		t.Fatalf("alerts = %+v, want one reporting recovery for %q", alerts, preferred)
+		t.Fatalf("alerts = %+v, want one result-backed reporting recovery for %q", alerts, preferred)
 	}
 }
 
@@ -221,8 +227,8 @@ func TestIsolationIsAlertedOnceAndSoIsTheRejoin(t *testing.T) {
 
 	h.submitMesh(t, srv, "probe-a", map[string]bool{"probe-b": true, "probe-c": true})
 	alerts = h.notifier.all()
-	if len(alerts) != 3 || alerts[1].Kind != KindRejoined || alerts[2].Kind != KindReporting {
-		t.Fatalf("alerts = %+v, want rejoin and reporting recoveries — otherwise the alerts never close", alerts)
+	if len(alerts) != 2 || alerts[1].Kind != KindRejoined {
+		t.Fatalf("alerts = %+v, want rejoin without reporting recovery before a result", alerts)
 	}
 }
 
