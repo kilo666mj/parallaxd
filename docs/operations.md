@@ -1,5 +1,32 @@
 # Recurring operations
 
+## Targeted deployments
+
+Use tags for routine changes instead of reconciling the entire fleet:
+
+```sh
+# Catalogue, trust anchors, and service configuration
+ansible-playbook ansible/playbook.yml --tags config
+
+# Rebuild/install binaries and restart affected services
+ansible-playbook ansible/playbook.yml --tags code
+
+# WireGuard and firewall topology only
+ansible-playbook ansible/playbook.yml --tags network
+
+# First-install accounts, directories, firewalld, and signing keys
+ansible-playbook ansible/playbook.yml --tags bootstrap
+```
+
+Run the untagged playbook for a full reconciliation. Code and configuration
+tags include the service-specific plays so changed binaries restart only after
+their configuration is present and validated.
+
+The repository enables SSH connection multiplexing and Ansible pipelining.
+Do not replace `ssh_args` without retaining `ControlMaster` and
+`ControlPersist`; doing so creates a new SSH connection for nearly every task
+and makes even configuration-only runs unnecessarily slow.
+
 Automation should prove each layer independently. A green coordinator page is
 not evidence that its backup restores, and a running standby process is not
 evidence that it has a usable recovery point.

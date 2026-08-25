@@ -183,7 +183,8 @@ type checkConfig struct {
 
 	// Prober is the preferred owner. Empty uses rendezvous hashing; dynamic
 	// assignment temporarily moves checks away from unavailable owners.
-	Prober string `json:"prober,omitempty"`
+	Prober  string   `json:"prober,omitempty"`
+	Probers []string `json:"probers,omitempty"`
 }
 
 func (c checkConfig) toCheck() check.Check {
@@ -193,6 +194,7 @@ func (c checkConfig) toCheck() check.Check {
 		Quorum: c.Quorum, ExpectStatus: c.ExpectStatus, ExpectBody: c.ExpectBody,
 		Send:       c.Send,
 		Prober:     c.Prober,
+		Probers:    append([]string(nil), c.Probers...),
 		HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders, HTTPBody: c.HTTPBody,
 		ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
 		DNSServer: c.DNSServer, DNSRCode: c.DNSRCode, GRPCService: c.GRPCService, GRPCTLS: c.GRPCTLS,

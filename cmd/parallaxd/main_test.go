@@ -43,7 +43,7 @@ func validConfigFile(t *testing.T) string {
 		},
 		"checks": []map[string]any{{
 			"name": "site", "kind": "http", "target": "https://example.com", "vantage": "public",
-			"interval": "1m", "timeout": "15s",
+			"interval": "1m", "timeout": "15s", "prober": "a", "probers": []string{"a", "b"},
 			"quorum": map[string]any{"agree": 2, "of": 2, "distinct_providers": true},
 		}},
 	}

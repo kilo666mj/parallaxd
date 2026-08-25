@@ -20,12 +20,14 @@
   gather_facts: true
   tasks:
     - name: Install firewalld
+      tags: [bootstrap]
       ansible.builtin.package:
         name: firewalld
         state: present
       when: parallaxd_manage_firewalld
 
     - name: Enable and start firewalld
+      tags: [bootstrap]
       ansible.builtin.systemd:
         name: firewalld
         enabled: true
@@ -33,6 +35,7 @@
       when: parallaxd_manage_firewalld
 
     - name: Create the service account
+      tags: [bootstrap]
       ansible.builtin.user:
         name: "{{ parallaxd_user }}"
         system: true
@@ -41,6 +44,7 @@
         create_home: false
 
     - name: Create configuration directories
+      tags: [bootstrap]
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
@@ -53,6 +57,7 @@
         - "{{ parallaxd_key_dir }}"
 
     - name: Create the prober CA directory
+      tags: [config]
       ansible.builtin.file:
         path: "{{ parallaxd_ca_dir }}"
         state: directory
@@ -62,6 +67,7 @@
       when: inventory_hostname in groups['parallaxd_probers']
 
     - name: Install additional prober trust anchors
+      tags: [config]
       ansible.builtin.copy:
         content: "{{ item.value | trim }}\n"
         dest: "{{ parallaxd_ca_dir }}/{{ item.key }}.pem"
@@ -74,6 +80,7 @@
       when: inventory_hostname in groups['parallaxd_probers']
 
     - name: Resolve the target architecture
+      tags: [code]
       ansible.builtin.set_fact:
         parallaxd_goarch: >-
           {{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64',
@@ -81,6 +88,7 @@
               ansible_facts['architecture'], ansible_facts['architecture']) }}
 
     - name: Resolve the distinct build architectures
+      tags: [code]
       ansible.builtin.set_fact:
         parallaxd_build_architectures: >-
           {{ ansible_play_hosts_all
@@ -89,6 +97,7 @@
       run_once: true
 
     - name: Resolve each component source version
+      tags: [code]
       ansible.builtin.command:
         cmd: "{{ playbook_dir }}/scripts/component-version.sh {{ item }}"
         chdir: "{{ playbook_dir }}/.."
@@ -111,6 +120,7 @@
     # unrelated repository commits, so copy's checksum comparison only schedules
     # restarts for services whose transitive project sources actually changed.
     - name: Build each binary and architecture once locally
+      tags: [code]
       ansible.builtin.command:
         cmd: >-
           go build -buildvcs=false -trimpath
@@ -143,6 +153,7 @@
       check_mode: false
 
     - name: Install the coordinator binary
+      tags: [code]
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../parallaxd-parallaxd-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd
@@ -151,6 +162,7 @@
       register: parallaxd_coordinator_binary_install
 
     - name: Install the prober binary
+      tags: [code]
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../parallaxd-parallaxd-probe-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd-probe
@@ -159,6 +171,7 @@
       register: parallaxd_prober_binary_install
 
     - name: Install the watcher binary
+      tags: [code]
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../parallaxd-parallaxd-watch-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd-watch
@@ -167,12 +180,14 @@
       register: parallaxd_watcher_binary_install
 
     - name: Install the encrypted-network enrollment command
+      tags: [code, network]
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../parallaxd-parallaxd-network-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd-network
         mode: "0755"
 
     - name: Stage the encrypted-network command for check-mode validation
+      tags: [network]
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../parallaxd-parallaxd-network-linux-{{ parallaxd_goarch }}"
         dest: /tmp/parallaxd-network-check
@@ -182,6 +197,7 @@
       changed_when: false
 
     - name: Check whether a keypair already exists
+      tags: [bootstrap]
       ansible.builtin.stat:
         path: "{{ parallaxd_key_dir }}/private"
       register: parallaxd_existing_key
@@ -198,6 +214,7 @@
     # arrives at bash split across two lines. That produced a syntax error
     # on every host on the first attempt.
     - name: Resolve which binary mints this host's key
+      tags: [bootstrap]
       ansible.builtin.set_fact:
         parallaxd_genkey_bin: >-
           {{ '/usr/local/bin/parallaxd'
@@ -205,6 +222,7 @@
              else '/usr/local/bin/parallaxd-probe' }}
 
     - name: Generate a keypair
+      tags: [bootstrap]
       when:
         - not parallaxd_existing_key.stat.exists
         - inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
@@ -248,6 +266,7 @@
             state: absent
 
     - name: Secure the private key
+      tags: [bootstrap]
       when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.file:
         path: "{{ parallaxd_key_dir }}/private"
@@ -256,6 +275,7 @@
         mode: "0400"
 
     - name: Secure the public key
+      tags: [bootstrap]
       when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.file:
         path: "{{ parallaxd_key_dir }}/public"
@@ -266,12 +286,14 @@
     # Read back so the other side's config can be written. Only the public half
     # is ever fetched; the private half stays on the host that made it.
     - name: Read the public key
+      tags: [bootstrap]
       when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.slurp:
         src: "{{ parallaxd_key_dir }}/public"
       register: parallaxd_public_key_raw
 
     - name: Record the public key
+      tags: [bootstrap]
       when: inventory_hostname in groups['parallaxd_coordinator'] + groups['parallaxd_probers']
       ansible.builtin.set_fact:
         parallaxd_public_key: "{{ parallaxd_public_key_raw.content | b64decode | trim }}"
@@ -281,6 +303,7 @@
 - name: Configure the watcher
   hosts: parallaxd_watch
   become: true
+  tags: [config, code]
   tasks:
     - name: Read the coordinator public key for the watcher
       ansible.builtin.slurp:
@@ -358,6 +381,7 @@
 - name: Configure probers
   hosts: parallaxd_probers:!parallaxd_internal_probers
   become: true
+  tags: [config, code]
   tasks:
     - name: Configure a public prober
       ansible.builtin.include_tasks: tasks/configure-prober.yml
@@ -374,6 +398,7 @@
 - name: Configure the encrypted coordinator and internal-prober network
   hosts: parallaxd_coordinator:parallaxd_standby:parallaxd_internal_probers
   become: true
+  tags: [network]
   pre_tasks:
     - name: Skip HA setup when no standby is configured
       ansible.builtin.meta: end_play
@@ -614,6 +639,7 @@
 - name: Configure internal probers
   hosts: parallaxd_internal_probers
   become: true
+  tags: [config, code]
   tasks:
     - name: Configure an internal prober
       ansible.builtin.include_tasks: tasks/configure-prober.yml
@@ -630,6 +656,7 @@
 - name: Configure the coordinator
   hosts: parallaxd_coordinator:parallaxd_standby
   become: true
+  tags: [config, code]
   tasks:
     - name: Fail when operator authentication is not configured
       ansible.builtin.assert:
