@@ -441,7 +441,7 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		destination := destinationConfigs[name]
 		var notifier coordinator.Notifier
 		if destination.Driver == "tintwire" {
-			var options []tintwire.Option
+			options := []tintwire.Option{tintwire.WithPrimaryRetries(2, 250*time.Millisecond)}
 			if fallback := fallbacks[name]; fallback != "" {
 				options = append(options, tintwire.WithMattermostFailover(destinationConfigs[fallback].Webhook))
 			}
@@ -449,7 +449,7 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 			if err != nil {
 				return config{}, nil, fmt.Errorf("notification destination %q: %w", name, err)
 			}
-			notifier = coordinator.TintwireNotifier{Client: client, Channel: destination.Channel, Source: destination.Username}
+			notifier = coordinator.TintwireNotifier{Client: client, Channel: destination.Channel, Source: destination.Username, Log: log}
 		} else {
 			notifier = coordinator.WebhookNotifier{
 				URL: destination.Webhook, Headers: destination.Headers, Username: destination.Username,

@@ -1,7 +1,10 @@
 package coordinator
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,12 +13,29 @@ import (
 )
 
 type captureTintwirePublisher struct {
-	card tintwire.Card
+	card   tintwire.Card
+	result tintwire.Result
 }
 
-func (publisher *captureTintwirePublisher) Send(_ context.Context, card tintwire.Card) error {
+func (publisher *captureTintwirePublisher) Publish(_ context.Context, card tintwire.Card) (tintwire.Result, error) {
 	publisher.card = card
-	return nil
+	return publisher.result, nil
+}
+
+func TestTintwireNotifierLogsMattermostFallback(t *testing.T) {
+	var output bytes.Buffer
+	publisher := &captureTintwirePublisher{result: tintwire.Result{
+		Destination:  tintwire.DestinationMattermost,
+		PrimaryError: &tintwire.HTTPError{StatusCode: 503, Status: "503 Service Unavailable"},
+	}}
+	notifier := TintwireNotifier{Client: publisher, Log: slog.New(slog.NewTextHandler(&output, nil))}
+	if err := notifier.Notify(t.Context(), Alert{Check: "website", Kind: KindDown}); err != nil {
+		t.Fatal(err)
+	}
+	logged := output.String()
+	if !strings.Contains(logged, "Mattermost fallback") || !strings.Contains(logged, "503 Service Unavailable") {
+		t.Fatalf("fallback log = %q", logged)
+	}
 }
 
 func TestTintwireNotifierBuildsNativeAlertCard(t *testing.T) {

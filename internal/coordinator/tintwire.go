@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -11,7 +12,7 @@ import (
 )
 
 type tintwirePublisher interface {
-	Send(context.Context, tintwire.Card) error
+	Publish(context.Context, tintwire.Card) (tintwire.Result, error)
 }
 
 // TintwireNotifier translates a decided alert into a native Tintwire card.
@@ -22,13 +23,22 @@ type TintwireNotifier struct {
 	Client  tintwirePublisher
 	Channel string
 	Source  string
+	Log     *slog.Logger
 }
 
 func (n TintwireNotifier) Notify(ctx context.Context, alert Alert) error {
 	if n.Client == nil {
 		return fmt.Errorf("tintwire notifier needs a client")
 	}
-	return n.Client.Send(ctx, tintwireCard(alert, n.Channel, n.Source))
+	result, err := n.Client.Publish(ctx, tintwireCard(alert, n.Channel, n.Source))
+	if err != nil {
+		return err
+	}
+	if result.Destination == tintwire.DestinationMattermost && n.Log != nil {
+		n.Log.Warn("Tintwire delivery used Mattermost fallback",
+			"subject", alert.Subject(), "kind", string(alert.Kind), "tintwire_error", result.PrimaryError)
+	}
+	return nil
 }
 
 func tintwireCard(alert Alert, channel, source string) tintwire.Card {
