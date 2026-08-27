@@ -1,0 +1,56 @@
+{
+  "name": "coordinator",
+  "listen": "0.0.0.0:8972",
+  "key_file": "/demo/keys/coordinator-private",
+  "state_file": "/var/lib/parallaxd/state.json",
+  "bootstrap_admin": "demo-admin",
+  "bootstrap_password_file": "/demo/bootstrap-password",
+  "insecure_session_cookies": true,
+  "heartbeat": {
+    "url": "http://watcher:8974/v1/heartbeat",
+    "interval": "15s"
+  },
+  "probers": [
+    {
+      "name": "probe-a",
+      "url": "http://probe-a:8973",
+      "provider": "demo-provider-a",
+      "public_key": "9Uug4mCmV0pegrjlfx5YoxXiu2ExFUzQSvTwVV5Tr20="
+    },
+    {
+      "name": "probe-b",
+      "url": "http://probe-b:8973",
+      "provider": "demo-provider-b",
+      "public_key": "5hPEejAAsrEeKHhONk28YE+Q3grq3Z+zbfRolQhiJZw="
+    },
+    {
+      "name": "probe-c",
+      "url": "http://probe-c:8973",
+      "provider": "demo-provider-c",
+      "public_key": "m8V85xLsASiXwMDgr2YLz69IzAf0hv6otl20Mv9ffv0="
+    }
+  ],
+  "checks": [
+    {
+      "name": "demo-web",
+      "prober": "probe-a",
+      "kind": "http",
+      "target": "http://demo-target/",
+      "vantage": "internal",
+      "interval": "5s",
+      "timeout": "2s",
+      "quorum": {
+        "agree": 2,
+        "of": 3,
+        "distinct_providers": true
+      }
+    }
+  ],
+  "fan_out_timeout": "5s",
+  "request_ttl": "10s",
+  "result_max_age": "30s",
+  "stale_multiplier": 3,
+  "stale_grace": "5s",
+  "watch_interval": "2s",
+  "mesh_max_age": "30s"
+}

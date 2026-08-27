@@ -1,0 +1,8 @@
+{
+  "name": "demo-watch",
+  "listen": "0.0.0.0:8974",
+  "grace": "45s",
+  "check_interval": "2s",
+  "coordinator_name": "coordinator",
+  "coordinator_key": "m6mn3+ticrSNwjbnfnRwklMDbuI8QlvDf44gxV3S53o="
+}

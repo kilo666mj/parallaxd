@@ -1,0 +1,107 @@
+name: parallaxd-demo
+
+x-parallaxd: &parallaxd
+  image: parallaxd-demo:local
+  init: true
+  read_only: true
+  restart: unless-stopped
+  networks:
+    demo:
+
+services:
+  coordinator:
+    <<: *parallaxd
+    build:
+      context: .
+    command: ["parallaxd", "-config", "/demo/coordinator.json"]
+    volumes:
+      - ./demo:/demo:ro
+      - coordinator-state:/var/lib/parallaxd
+    ports:
+      - "127.0.0.1:8972:8972"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8972/v1/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  probe-a:
+    <<: *parallaxd
+    command: ["sh", "-c", "sleep 2; exec parallaxd-probe -config /demo/probe-a.json"]
+    volumes:
+      - ./demo:/demo:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+      demo-target:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8973/v1/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  probe-b:
+    <<: *parallaxd
+    command: ["sh", "-c", "sleep 2; exec parallaxd-probe -config /demo/probe-b.json"]
+    volumes:
+      - ./demo:/demo:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+      demo-target:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8973/v1/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  probe-c:
+    <<: *parallaxd
+    command: ["sh", "-c", "sleep 2; exec parallaxd-probe -config /demo/probe-c.json"]
+    volumes:
+      - ./demo:/demo:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+      demo-target:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8973/v1/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  watcher:
+    <<: *parallaxd
+    command: ["parallaxd-watch", "-config", "/demo/watch.json"]
+    volumes:
+      - ./demo:/demo:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8974/v1/status"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  demo-target:
+    image: nginx:1.29-alpine
+    init: true
+    restart: unless-stopped
+    networks:
+      demo:
+        ipv4_address: 172.30.0.10
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+networks:
+  demo:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  coordinator-state:

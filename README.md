@@ -74,6 +74,21 @@ operators receive one service-level alert instead of one alert per port.
 
 ## Deployment
 
+### Try it on one machine
+
+The Docker Compose demo brings up a coordinator, three probers, a watcher, and
+a controllable HTTP target on one machine:
+
+```sh
+docker compose up --build --wait
+```
+
+Open `http://127.0.0.1:8972` and follow the
+[`demo` exercise](demo/README.md). The demo uses public, deliberately insecure
+keys and credentials. Its provider labels are illustrative: containers on one
+host are not independent failure domains, so Compose is for evaluation only
+and must not be used as a production deployment.
+
 A meaningful deployment needs one dedicated coordinator and at least three
 probers in distinct failure domains. The minimal topology below shares the
 watcher with one prober and omits the optional standby. Add HA only after this

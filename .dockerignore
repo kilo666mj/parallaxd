@@ -1,0 +1,10 @@
+.git
+.github
+ansible
+docs
+*.db
+*.db-wal
+*.db-shm
+parallaxd
+parallaxd-probe
+parallaxd-*-linux-*

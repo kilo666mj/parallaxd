@@ -1,0 +1,14 @@
+{
+  "name": "probe-a",
+  "provider": "demo-provider-a",
+  "listen": "0.0.0.0:8973",
+  "key_file": "/demo/keys/probe-a-private",
+  "coordinator_name": "coordinator",
+  "coordinator_url": "http://coordinator:8972",
+  "coordinator_key": "m6mn3+ticrSNwjbnfnRwklMDbuI8QlvDf44gxV3S53o=",
+  "allow_targets": ["172.30.0.0/24"],
+  "checks": [],
+  "mesh_interval": "10s",
+  "mesh_timeout": "1s",
+  "assignment_interval": "2s"
+}
