@@ -1,0 +1,22 @@
+---
+# Copy this file to group_vars/all.yml. The destination is gitignored.
+# Store production values with Ansible Vault or your normal secret manager.
+
+# Required for dashboard login and operator API access. Replace both values;
+# the playbook refuses to expose a coordinator without an authentication mode.
+parallaxd_bootstrap_admin_name: admin
+parallaxd_bootstrap_admin_password: CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD
+
+# Optional generic webhook shared by the coordinator and watcher. With an
+# empty value, alerts remain in the journal and the watcher logs a warning.
+parallaxd_webhook_url: ""
+
+# Required only after adding a host to [parallaxd_standby]. Use at least 32
+# random characters, for example: openssl rand -hex 32
+parallaxd_replication_token_secret: ""
+
+# Optional additional CA certificates installed on probers. Keep certificate
+# files beside this playbook under files/ and reference their controller path.
+parallaxd_ca_files: {}
+# parallaxd_ca_files:
+#   internal: "{{ lookup('file', '../files/internal-ca.crt') }}"

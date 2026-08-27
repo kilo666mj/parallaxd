@@ -2,20 +2,21 @@
 
 ## Targeted deployments
 
-Use tags for routine changes instead of reconciling the entire fleet:
+Run these commands from the repository's `ansible` directory. Use tags for
+routine changes instead of reconciling the entire fleet:
 
 ```sh
 # Catalogue, trust anchors, and service configuration
-ansible-playbook ansible/playbook.yml --tags config
+ansible-playbook playbook.yml --tags config
 
 # Rebuild/install binaries and restart affected services
-ansible-playbook ansible/playbook.yml --tags code
+ansible-playbook playbook.yml --tags code
 
 # WireGuard and firewall topology only
-ansible-playbook ansible/playbook.yml --tags network
+ansible-playbook playbook.yml --tags network
 
 # First-install accounts, directories, firewalld, and signing keys
-ansible-playbook ansible/playbook.yml --tags bootstrap
+ansible-playbook playbook.yml --tags bootstrap
 ```
 
 Run the untagged playbook for a full reconciliation. Code and configuration

@@ -32,13 +32,15 @@
 coordinator  parallaxd_address=198.51.100.10  parallaxd_provider=provider-zero
 
 [parallaxd_standby]
-probe-b      parallaxd_address=198.51.100.12
+# Optional. Add one host only after the minimal deployment works. The standby
+# needs a different provider from the coordinator and a replication token in
+# group_vars/all.yml; see docs/ha-drill.md before enabling it.
+# probe-b  parallaxd_address=198.51.100.12  parallaxd_provider=provider-two
 
 [parallaxd_probers]
 probe-a  parallaxd_address=198.51.100.11  parallaxd_provider=provider-one
 probe-b  parallaxd_address=198.51.100.12  parallaxd_provider=provider-two
 probe-c  parallaxd_address=198.51.100.13  parallaxd_provider=provider-three
-probe-d  parallaxd_address=198.51.100.14  parallaxd_provider=provider-four
 # internal-a  parallaxd_address=10.77.0.11  parallaxd_provider=site-one
 # internal-b  parallaxd_address=10.77.0.12  parallaxd_provider=site-one
 # internal-c  parallaxd_address=10.77.0.13  parallaxd_provider=site-one

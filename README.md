@@ -74,20 +74,48 @@ operators receive one service-level alert instead of one alert per port.
 
 ## Deployment
 
-A meaningful production deployment needs one dedicated coordinator and at
-least three probers in distinct failure domains. Four probers provide a spare.
-The watcher may share a prober host, as may the optional standby.
+A meaningful deployment needs one dedicated coordinator and at least three
+probers in distinct failure domains. The minimal topology below shares the
+watcher with one prober and omits the optional standby. Add HA only after this
+topology works; four probers then provide a spare.
 
-Linux and Ansible are required for deployment:
+### Prerequisites
+
+The Ansible controller needs Linux, Ansible, the Go version declared in
+[`go.mod`](go.mod), `ansible.posix`, and SSH access with privilege escalation
+to every target. Targets need a systemd-based Linux distribution with a
+supported package manager. By default, the playbook installs and manages
+firewalld. Ensure the hosts can reach each other at the addresses in the
+inventory; TCP ports 8972–8974 carry the control traffic.
+
+Ed25519 signs that traffic but does not encrypt it. Use private networking or
+another encrypted transport for production. The project-managed WireGuard
+overlay is configured when a standby is enabled and can also carry
+internal-prober traffic.
+
+### Minimal installation
+
+Run these commands from the `ansible` directory:
 
 ```sh
 git clone https://github.com/kilo666mj/parallaxd.git
 cd parallaxd/ansible
 ansible-galaxy collection install -r requirements.yml
 cp inventory.example inventory
-# Edit inventory and put secrets in the gitignored group_vars/all.yml.
+cp group_vars/all.yml.example group_vars/all.yml
+# Edit inventory and replace the bootstrap password in group_vars/all.yml
+# (one way to generate it is: openssl rand -base64 32).
+ansible-inventory --graph
+ansible all -m ping
+ansible-playbook playbook.yml --syntax-check
+ansible-playbook playbook.yml --check --diff
 ansible-playbook playbook.yml
 ```
+
+The example intentionally starts with no standby, no internal probers, no
+custom CA, and no remote alert destination. Alerts are still recorded locally.
+Before using the deployment in production, configure a watcher destination and
+protect `group_vars/all.yml` with Ansible Vault or your normal secret manager.
 
 Start with the documented variables in
 [`ansible/group_vars/parallaxd.yml`](ansible/group_vars/parallaxd.yml). The
@@ -104,10 +132,29 @@ The inventory has these groups:
 - `parallaxd_internal_probers`: optional private probers on the managed
   WireGuard overlay.
 
-Keep secrets out of committed configuration. The example group variables name
-the expected gitignored secret values. Private prober keys remain on their
-hosts; the standby is the deliberate exception because it must retain the
-coordinator identity trusted by the fleet.
+Keep secrets out of committed configuration. The sanitized
+[`all.yml.example`](ansible/group_vars/all.yml.example) names the expected
+gitignored values. Private prober keys remain on their hosts; the standby is
+the deliberate exception because it must retain the coordinator identity
+trusted by the fleet.
+
+### Verify the installation
+
+After the play completes:
+
+```sh
+ansible parallaxd_coordinator -b -m command \
+  -a 'systemctl is-active parallaxd'
+ansible parallaxd_probers -b -m command \
+  -a 'systemctl is-active parallaxd-probe'
+ansible parallaxd_watch -b -m command \
+  -a 'systemctl is-active parallaxd-watch'
+```
+
+Open the dashboard through the SSH tunnel described below, sign in with the
+bootstrap account, and confirm that all three probers have fresh evidence.
+Then add the example monitor below and confirm it reports `up` before enabling
+notifications or HA.
 
 ### Add a monitor
 

@@ -663,12 +663,15 @@
         that:
           - >-
             parallaxd_operator_token | trim | length > 0 or
-            parallaxd_bootstrap_admin | trim | length > 0 or
+            (parallaxd_bootstrap_admin | trim | length > 0 and
+             parallaxd_bootstrap_password | trim | length >= 16 and
+             parallaxd_bootstrap_password != 'CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD') or
             parallaxd_oidc_issuer | trim | length > 0 or
             inventory_hostname in parallaxd_standby_hosts
         fail_msg: >-
-          Configure parallaxd_operator_token, parallaxd_bootstrap_admin, or
-          parallaxd_oidc_issuer before exposing the coordinator.
+          Configure parallaxd_operator_token, parallaxd_oidc_issuer, or a
+          parallaxd_bootstrap_admin with a password of at least 16 characters
+          before exposing the coordinator.
 
     - name: Read prober public keys for the coordinator
       ansible.builtin.slurp:

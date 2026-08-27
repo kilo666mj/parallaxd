@@ -9,8 +9,10 @@ parallaxd_ca_dir: "{{ parallaxd_config_dir }}/ca"
 # Optional PEM trust anchors installed on every prober. Monitor ca_file values
 # refer to these local paths; certificate contents are never sent through the
 # coordinator protocol. Example: {internal: "{{ lookup('file', 'internal-ca.pem') }}"}
-parallaxd_ca_files:
-  internal: "{{ lookup('file', '../files/internal-ca.crt') }}"
+parallaxd_ca_files: {}
+# Example override in group_vars/all.yml:
+# parallaxd_ca_files:
+#   internal: "{{ lookup('file', '../files/internal-ca.crt') }}"
 parallaxd_manage_firewalld: true
 
 # Ports. The control API is reachable only from the addresses in the allowlist
