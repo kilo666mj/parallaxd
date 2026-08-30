@@ -61,6 +61,7 @@ The design relies on a few rules:
 | `parallaxd-watch` | Alerts when the coordinator's signed heartbeat stops |
 | `parallaxd-ha` | Preflights and explicitly promotes a fenced warm standby |
 | `parallaxd-network` | Creates and installs the WireGuard control overlay |
+| `parallaxd-mcp` | Gives local MCP clients typed, authenticated operator tools |
 
 The coordinator also serves an operator dashboard, authenticated monitor and
 incident APIs, a redacted public status export, observation history, and HA
@@ -208,6 +209,39 @@ parallaxd -config /etc/parallaxd/coordinator.json.candidate -validate
 
 The Ansible deployment performs the same preflight before atomically replacing
 the live configuration.
+
+### Agent access with MCP
+
+`parallaxd-mcp` is a local stdio MCP server that exposes typed tools for status,
+incidents, diagnostics, history, monitor validation and testing, and the
+versioned monitor catalogue. It calls the existing authenticated coordinator
+API, so the coordinator remains responsible for authorization, validation,
+auditing, persistence, and HA replication.
+
+Create a dedicated API token in the dashboard and store it in a mode-0600 file.
+Use a `viewer` token for read-only access, an `operator` token to validate,
+test, create, update, or delete monitors, or an `admin` token only when catalogue
+rollback is required. Never put the token itself in MCP arguments or command-line
+flags.
+
+Example client configuration:
+
+```json
+{
+  "mcpServers": {
+    "parallaxd": {
+      "command": "parallaxd-mcp",
+      "args": [
+        "-coordinator", "https://status.example.com",
+        "-token-file", "/path/to/parallaxd-mcp.token"
+      ]
+    }
+  }
+}
+```
+
+The MCP process runs on the operator workstation and needs network access to the
+coordinator; it is not installed on the coordinator by the Ansible playbook.
 
 ## Operations
 
