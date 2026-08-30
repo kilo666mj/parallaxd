@@ -218,11 +218,10 @@ the versioned monitor catalogue. Tool calls pass through the existing
 authenticated coordinator API, so authorization, validation, auditing,
 persistence, and HA replication have one implementation.
 
-Create a dedicated API token in the dashboard and provide it to the MCP client
-through its secret or environment-variable support.
-Use a `viewer` token for read-only access, an `operator` token to validate,
-test, create, update, or delete monitors, or an `admin` token only when catalogue
-rollback is required. Never put the token in a URL or tracked configuration.
+Create a dedicated API token in the dashboard. Start agents with a `viewer`
+token, use `operator` only when monitor changes are required, and reserve
+`admin` for catalogue rollback. Never put the token in a URL or tracked
+configuration.
 
 Example Codex configuration:
 
@@ -235,7 +234,8 @@ default_tools_approval_mode = "writes"
 
 Expose `/mcp` only through the same trusted TLS and network boundary used for
 the authenticated operator API. The endpoint does not weaken the coordinator's
-existing source allowlist or transport requirements.
+existing source allowlist or transport requirements. See the complete
+[MCP setup, verification, troubleshooting, and rotation guide](docs/mcp.md).
 
 ## Operations
 

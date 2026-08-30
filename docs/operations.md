@@ -34,6 +34,8 @@ evidence that it has a usable recovery point.
 
 ## Every day
 
+- Confirm a dedicated viewer credential can initialize `/mcp` and call
+  `parallaxd_get_status`; do not use an administrator token for this check.
 - Check primary `/v1/diagnostics`: result queue depth and pending
   notifications are zero, no destination has a current error, and rejection
   counters have not unexpectedly increased.
@@ -67,6 +69,9 @@ evidence that it has a usable recovery point.
   announced HA exercise.
 - Review users, API tokens, external access policy, mTLS certificate expiry,
   and the operator/replication secret distribution path.
+- Review MCP client credentials and revoke unused tokens. Confirm each client
+  still has the minimum role and that `/mcp` remains behind the intended TLS,
+  source allowlist, VPN, or private transport boundary.
 - Restore a backup into a disposable coordinator and confirm incidents,
   silences, users, monitor revisions, history, and pending deliveries load.
 

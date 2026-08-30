@@ -37,6 +37,18 @@ with the exercise record. Remove credentials and sensitive monitor headers.
 - [ ] Diagnostics show no growing rejection, queue, replication, or delivery
       errors.
 
+## MCP agent access
+
+- [ ] An unauthenticated `POST /mcp` request receives `401`.
+- [ ] A dedicated `viewer` token initializes MCP, lists the expected tools,
+      and reads current status.
+- [ ] The viewer token cannot create, update, delete, test, or roll back a
+      monitor; the coordinator returns `403`.
+- [ ] The MCP route uses the intended TLS/private transport and does not add a
+      broader coordinator firewall rule.
+- [ ] Client configuration contains no credential in a URL, tracked file,
+      exercise record, or captured response.
+
 ## Target failure and recovery
 
 1. Stop only the disposable target or install a narrowly scoped temporary
