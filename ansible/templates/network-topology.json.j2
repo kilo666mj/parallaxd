@@ -5,6 +5,7 @@
   "interface": {{ parallaxd_ha_wireguard_interface | to_json }},
   "address": {{ ((parallaxd_address if inventory_hostname in parallaxd_internal_prober_hosts else (parallaxd_ha_standby_address if inventory_hostname in parallaxd_standby_hosts else parallaxd_ha_primary_address)) + '/32') | to_json }},
   "overlay": {{ parallaxd_network_overlay | to_json }},
+  "mtu": {{ parallaxd_network_mtu }},
   "listen_port": {{ parallaxd_ha_wireguard_port }},
   "endpoint": {{ ((parallaxd_address + ':' + parallaxd_ha_wireguard_port|string) if inventory_hostname in parallaxd_coordinator_nodes else '') | to_json }},
   "forward": {{ (inventory_hostname == groups['parallaxd_coordinator'][0] and parallaxd_internal_prober_hosts | length > 0) | to_json }},

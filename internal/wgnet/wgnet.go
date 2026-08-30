@@ -157,6 +157,7 @@ type Topology struct {
 	Overlay    string `json:"overlay"`
 	Endpoint   string `json:"endpoint,omitempty"`
 	ListenPort int    `json:"listen_port,omitempty"`
+	MTU        int    `json:"mtu,omitempty"`
 	Forward    bool   `json:"forward,omitempty"`
 	Peers      []Peer `json:"peers"`
 }
@@ -179,7 +180,7 @@ func Reconcile(current *State, desired Topology) (State, bool, error) {
 	}
 	next.Version, next.Name, next.Role = StateVersion, desired.Name, desired.Role
 	next.Interface, next.Address, next.Overlay = desired.Interface, desired.Address, desired.Overlay
-	next.Endpoint, next.ListenPort, next.Forward = desired.Endpoint, desired.ListenPort, desired.Forward
+	next.Endpoint, next.ListenPort, next.MTU, next.Forward = desired.Endpoint, desired.ListenPort, desired.MTU, desired.Forward
 	next.Peers = append([]Peer(nil), desired.Peers...)
 	sort.Slice(next.Peers, func(i, j int) bool { return next.Peers[i].Name < next.Peers[j].Name })
 	if err := next.Validate(); err != nil {

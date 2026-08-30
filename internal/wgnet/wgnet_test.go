@@ -137,7 +137,7 @@ func TestReconcilePreservesKeysAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	topology := Topology{Version: 1, Name: "coordinator", Role: RoleHub, Interface: "wg-parallaxd", Address: "10.77.0.1/32", Overlay: "10.77.0.0/24", Endpoint: "hub.example:51821", ListenPort: 51821, Peers: []Peer{{Name: "probe-a", Address: "10.77.0.10", PublicKey: peerPair.PublicKey, AllowedIPs: []string{"10.77.0.10/32"}}}}
+	topology := Topology{Version: 1, Name: "coordinator", Role: RoleHub, Interface: "wg-parallaxd", Address: "10.77.0.1/32", Overlay: "10.77.0.0/24", Endpoint: "hub.example:51821", ListenPort: 51821, MTU: 1280, Peers: []Peer{{Name: "probe-a", Address: "10.77.0.10", PublicKey: peerPair.PublicKey, AllowedIPs: []string{"10.77.0.10/32"}}}}
 	next, changed, err := Reconcile(&current, topology)
 	if err != nil {
 		t.Fatal(err)
@@ -147,6 +147,9 @@ func TestReconcilePreservesKeysAndIsIdempotent(t *testing.T) {
 	}
 	if next.PrivateKey != pair.PrivateKey || next.PublicKey != pair.PublicKey {
 		t.Fatal("reconcile rotated local keys")
+	}
+	if next.MTU != topology.MTU {
+		t.Fatalf("reconciled MTU = %d, want %d", next.MTU, topology.MTU)
 	}
 	again, changed, err := Reconcile(&next, topology)
 	if err != nil {

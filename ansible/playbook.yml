@@ -80,7 +80,7 @@
       when: inventory_hostname in groups['parallaxd_probers']
 
     - name: Resolve the target architecture
-      tags: [code]
+      tags: [code, network]
       ansible.builtin.set_fact:
         parallaxd_goarch: >-
           {{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64',

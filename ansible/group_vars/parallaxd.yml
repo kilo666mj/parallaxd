@@ -54,6 +54,10 @@ parallaxd_ha_wireguard_port: 51821
 parallaxd_network_state_dir: /var/lib/parallaxd/network
 parallaxd_network_topology_file: /etc/parallaxd/network-topology.json
 parallaxd_network_overlay: 10.77.0.0/24
+# Use the IPv6 minimum MTU for the Internet-carried overlay. The kernel's
+# default 1420 black-holed larger coordinator responses on an underlay path while
+# small requests and WireGuard handshakes still succeeded.
+parallaxd_network_mtu: 1280
 parallaxd_ha_primary_address: 10.77.0.1
 parallaxd_ha_standby_address: 10.77.0.2
 parallaxd_ha_primary_url: "http://{{ parallaxd_ha_primary_address }}:{{ parallaxd_coordinator_port }}"
