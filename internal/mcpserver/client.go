@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"time"
@@ -22,6 +23,16 @@ type Client struct {
 	Token   string
 	Actor   string
 	HTTP    *http.Client
+}
+
+type handlerTransport struct {
+	handler http.Handler
+}
+
+func (t handlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	recorder := httptest.NewRecorder()
+	t.handler.ServeHTTP(recorder, req)
+	return recorder.Result(), nil
 }
 
 func (c Client) Validate() error {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/kilo666mj/parallaxd/internal/check"
 	"github.com/kilo666mj/parallaxd/internal/coordinator"
+	"github.com/kilo666mj/parallaxd/internal/mcpserver"
 	"github.com/kilo666mj/parallaxd/internal/wire"
 	tintwire "github.com/kilo666mj/tintwire-go"
 )
@@ -271,6 +272,12 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	apiHandler := c.Handler()
+	mcpHandler, err := mcpserver.Hosted(apiHandler, version)
+	if err != nil {
+		return fmt.Errorf("configure MCP: %w", err)
+	}
+	c.SetMCPHandler(mcpHandler)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

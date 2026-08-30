@@ -253,6 +253,34 @@ func TestLocalUsersSessionsRolesAndTokens(t *testing.T) {
 	}
 }
 
+func TestMCPRouteRequiresAuthentication(t *testing.T) {
+	cfg := durableConfig(t, "", &fakeNotifier{}, nil)
+	cfg.OperatorToken = "secret"
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	c.SetMCPHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	unauthorized := httptest.NewRecorder()
+	c.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if unauthorized.Code != http.StatusUnauthorized || called {
+		t.Fatalf("unauthorized MCP status=%d called=%t", unauthorized.Code, called)
+	}
+
+	authorized := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	c.Handler().ServeHTTP(authorized, request)
+	if authorized.Code != http.StatusNoContent || !called {
+		t.Fatalf("authorized MCP status=%d called=%t", authorized.Code, called)
+	}
+}
+
 func TestUsersAndSessionsRestoreWithoutPlaintextSecrets(t *testing.T) {
 	stateFile := t.TempDir() + "/state.json"
 	cfg := durableConfig(t, stateFile, &fakeNotifier{}, nil)

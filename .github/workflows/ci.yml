@@ -91,7 +91,7 @@ jobs:
         run: |
           mkdir -p dist
           for arch in amd64 arm64; do
-            for command in parallaxd parallaxd-probe parallaxd-watch parallaxd-ha parallaxd-network parallaxd-mcp; do
+            for command in parallaxd parallaxd-probe parallaxd-watch parallaxd-ha parallaxd-network; do
               GOARCH=$arch go build -trimpath \
                 -ldflags "-s -w -X main.version=${VERSION}" \
                 -o "dist/${command}-linux-${arch}" "./cmd/${command}"
@@ -113,6 +113,4 @@ jobs:
             dist/parallaxd-ha-linux-arm64
             dist/parallaxd-network-linux-amd64
             dist/parallaxd-network-linux-arm64
-            dist/parallaxd-mcp-linux-amd64
-            dist/parallaxd-mcp-linux-arm64
             dist/SHA256SUMS

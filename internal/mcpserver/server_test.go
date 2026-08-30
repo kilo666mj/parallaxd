@@ -13,6 +13,27 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func connectHTTP(t *testing.T, handler http.Handler, token string) *mcp.ClientSession {
+	t.Helper()
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		r.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, r)
+		return recorder.Result(), nil
+	})}
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil).Connect(
+		t.Context(), &mcp.StreamableClientTransport{Endpoint: "http://parallaxd.test/mcp", HTTPClient: client}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	return mcpkittest.Connect(t, server)
@@ -141,5 +162,41 @@ func TestCoordinatorAuthorizationFailureReachesAgent(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatal("delete succeeded with a rejected token")
+	}
+}
+
+func TestHostedForwardsRequestTokenAndEnforcesAPIAuthorization(t *testing.T) {
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer viewer-secret" {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/status":
+			_, _ = w.Write([]byte(`[{"check":"website","status":"up"}]`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/monitors/website":
+			http.Error(w, "permission denied", http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	handler, err := Hosted(api, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := connectHTTP(t, handler, "viewer-secret")
+
+	read, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "parallaxd_get_status"})
+	if err != nil || read.IsError {
+		t.Fatalf("viewer read: result=%#v err=%v", read, err)
+	}
+	write, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: "parallaxd_delete_monitor", Arguments: map[string]any{"name": "website"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !write.IsError {
+		t.Fatal("viewer mutation unexpectedly succeeded")
 	}
 }

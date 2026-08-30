@@ -61,13 +61,13 @@ The design relies on a few rules:
 | `parallaxd-watch` | Alerts when the coordinator's signed heartbeat stops |
 | `parallaxd-ha` | Preflights and explicitly promotes a fenced warm standby |
 | `parallaxd-network` | Creates and installs the WireGuard control overlay |
-| `parallaxd-mcp` | Gives local MCP clients typed, authenticated operator tools |
 
 The coordinator also serves an operator dashboard, authenticated monitor and
-incident APIs, a redacted public status export, observation history, and HA
-diagnostics. Alert delivery supports the always-on log, durable generic
-webhooks, and native Tintwire cards with a generic-webhook fallback (for
-example, Mattermost) when Tintwire has a retryable delivery failure.
+incident APIs, a Streamable HTTP MCP endpoint at `/mcp`, a redacted public
+status export, observation history, and HA diagnostics. Alert delivery supports
+the always-on log, durable generic webhooks, and native Tintwire cards with a
+generic-webhook fallback (for example, Mattermost) when Tintwire has a
+retryable delivery failure.
 
 Supported checks are `tcp`, `http`, `banner`, `dns`, `tls`, `smtp`, `icmp`,
 `request`, `grpc`, and `ntp`. Related checks can be grouped into components so
@@ -212,36 +212,30 @@ the live configuration.
 
 ### Agent access with MCP
 
-`parallaxd-mcp` is a local stdio MCP server that exposes typed tools for status,
-incidents, diagnostics, history, monitor validation and testing, and the
-versioned monitor catalogue. It calls the existing authenticated coordinator
-API, so the coordinator remains responsible for authorization, validation,
-auditing, persistence, and HA replication.
+The coordinator's `/mcp` Streamable HTTP endpoint exposes typed tools for
+status, incidents, diagnostics, history, monitor validation and testing, and
+the versioned monitor catalogue. Tool calls pass through the existing
+authenticated coordinator API, so authorization, validation, auditing,
+persistence, and HA replication have one implementation.
 
-Create a dedicated API token in the dashboard and store it in a mode-0600 file.
+Create a dedicated API token in the dashboard and provide it to the MCP client
+through its secret or environment-variable support.
 Use a `viewer` token for read-only access, an `operator` token to validate,
 test, create, update, or delete monitors, or an `admin` token only when catalogue
-rollback is required. Never put the token itself in MCP arguments or command-line
-flags.
+rollback is required. Never put the token in a URL or tracked configuration.
 
-Example client configuration:
+Example Codex configuration:
 
-```json
-{
-  "mcpServers": {
-    "parallaxd": {
-      "command": "parallaxd-mcp",
-      "args": [
-        "-coordinator", "https://status.example.com",
-        "-token-file", "/path/to/parallaxd-mcp.token"
-      ]
-    }
-  }
-}
+```toml
+[mcp_servers.parallaxd]
+url = "https://status.example.com/mcp"
+bearer_token_env_var = "PARALLAXD_MCP_TOKEN"
+default_tools_approval_mode = "writes"
 ```
 
-The MCP process runs on the operator workstation and needs network access to the
-coordinator; it is not installed on the coordinator by the Ansible playbook.
+Expose `/mcp` only through the same trusted TLS and network boundary used for
+the authenticated operator API. The endpoint does not weaken the coordinator's
+existing source allowlist or transport requirements.
 
 ## Operations
 

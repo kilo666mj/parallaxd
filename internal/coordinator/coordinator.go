@@ -177,6 +177,7 @@ type Coordinator struct {
 	peers  []Peer
 	byName map[string]Peer
 	checks map[string]check.Check
+	mcp    http.Handler
 	// checks and monitors are a copy-on-write live catalogue. checks contains
 	// only enabled monitors; monitors also retains disabled definitions.
 	checksMu sync.RWMutex
@@ -264,6 +265,14 @@ type Coordinator struct {
 	historyMu  sync.Mutex
 	haMu       sync.Mutex
 	catalogMu  sync.Mutex
+}
+
+// SetMCPHandler mounts an application-supplied MCP handler at /mcp. The
+// coordinator still authenticates every request before handing it to MCP, and
+// individual tool calls continue through the normal operator API permission
+// checks. Call this before serving Handler.
+func (c *Coordinator) SetMCPHandler(handler http.Handler) {
+	c.mcp = handler
 }
 
 // entityState is what the coordinator remembers about one thing it reports on
@@ -919,6 +928,9 @@ func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (check.R
 // Handler serves the coordinator's HTTP surface.
 func (c *Coordinator) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if c.mcp != nil {
+		mux.HandleFunc("POST /mcp", c.viewOnly(c.mcp.ServeHTTP))
+	}
 	mux.HandleFunc("POST /v1/results", c.handleResult)
 	mux.HandleFunc("GET /v1/health", c.handleHealth)
 	mux.HandleFunc("GET /v1/status", c.viewOnly(c.handleStatus))

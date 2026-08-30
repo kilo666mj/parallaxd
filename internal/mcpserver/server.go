@@ -5,6 +5,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -13,6 +14,37 @@ import (
 	"github.com/kilo666mj/parallaxd/internal/coordinator"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// Hosted returns a bounded stateless Streamable HTTP MCP handler backed by the
+// coordinator's existing HTTP API. Each MCP request supplies its own bearer
+// token, so authorization and audit identity remain request-scoped.
+func Hosted(api http.Handler, version string) (http.Handler, error) {
+	if api == nil {
+		return nil, fmt.Errorf("coordinator API handler is required")
+	}
+	return mcpkit.StatelessHTTP(func(r *http.Request) *mcp.Server {
+		const prefix = "Bearer "
+		authorization := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authorization, prefix) {
+			return nil
+		}
+		token := strings.TrimSpace(strings.TrimPrefix(authorization, prefix))
+		if token == "" {
+			return nil
+		}
+		return New(Client{
+			BaseURL: "http://parallaxd.internal",
+			Token:   token,
+			Actor:   strings.TrimSpace(r.Header.Get("X-Parallaxd-Actor")),
+			HTTP:    &http.Client{Transport: handlerTransport{handler: api}},
+		}, version)
+	}, mcpkit.HTTPOptions{
+		// The coordinator may sit behind a loopback reverse proxy or SSH port
+		// forward. Its own bearer authentication remains outside this handler;
+		// browser origin protection remains enabled independently.
+		DisableLocalhostProtection: true,
+	})
+}
 
 type emptyInput struct{}
 
