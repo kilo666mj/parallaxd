@@ -1,0 +1,124 @@
+---
+- name: Provision a read-only Parallaxd credential for Switchboard
+  hosts: parallaxd_coordinator
+  become: true
+  serial: 1
+  vars:
+    switchboard_token_file: "{{ playbook_dir }}/local/switchboard_mcp_token"
+
+  tasks:
+    - name: Create the private controller credential directory
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/local"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Check for an existing controller copy of the credential
+      ansible.builtin.stat:
+        path: "{{ switchboard_token_file }}"
+      delegate_to: localhost
+      become: false
+      register: switchboard_token_state
+
+    - name: Read the coordinator bootstrap operator token
+      ansible.builtin.slurp:
+        src: /etc/parallaxd/keys/operator-token
+      register: parallaxd_bootstrap_token
+      when: not switchboard_token_state.stat.exists
+      no_log: true
+
+    - name: Issue Switchboard's viewer credential
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8972/v1/auth/tokens
+        method: POST
+        headers:
+          Authorization: "Bearer {{ parallaxd_bootstrap_token.content | b64decode | trim }}"
+          X-Parallaxd-Actor: ansible:switchboard
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: switchboard
+          role: viewer
+        status_code: 201
+        return_content: true
+      register: switchboard_token_created
+      when: not switchboard_token_state.stat.exists
+      no_log: true
+
+    - name: Retain the one-time credential on the controller
+      ansible.builtin.copy:
+        content: "{{ (switchboard_token_created.content | from_json).secret }}\n"
+        dest: "{{ switchboard_token_file }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      when: not switchboard_token_state.stat.exists
+      no_log: true
+
+    - name: Verify Switchboard's credential against the hosted MCP endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8972/mcp
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('ansible.builtin.file', switchboard_token_file) }}"
+          Accept: application/json, text/event-stream
+          Content-Type: application/json
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: initialize
+          params:
+            protocolVersion: "2025-06-18"
+            capabilities: {}
+            clientInfo:
+              name: switchboard-smoke
+              version: "1"
+        status_code: 200
+        return_content: true
+      register: switchboard_mcp_smoke
+      until:
+        - switchboard_mcp_smoke.status == 200
+        - "'parallaxd' in switchboard_mcp_smoke.content"
+      retries: 5
+      delay: 2
+      no_log: true
+
+    - name: Read the coordinator bootstrap token for credential reconciliation
+      ansible.builtin.slurp:
+        src: /etc/parallaxd/keys/operator-token
+      register: parallaxd_reconcile_token
+      no_log: true
+
+    - name: List service credentials for reconciliation
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8972/v1/auth/tokens
+        method: GET
+        headers:
+          Authorization: "Bearer {{ parallaxd_reconcile_token.content | b64decode | trim }}"
+          X-Parallaxd-Actor: ansible:switchboard
+        status_code: 200
+        return_content: true
+      register: parallaxd_service_credentials
+      no_log: true
+
+    - name: Revoke superseded Switchboard credentials
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8972/v1/auth/tokens/{{ item.id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ parallaxd_reconcile_token.content | b64decode | trim }}"
+          X-Parallaxd-Actor: ansible:switchboard
+          Content-Type: application/json
+        body_format: json
+        body:
+          actor: ansible:switchboard
+        status_code: 204
+      loop: "{{ parallaxd_service_credentials.content | from_json }}"
+      when:
+        - item.name == 'switchboard'
+        - item.revoked_at is not defined or not item.revoked_at
+        - item.prefix != (lookup('ansible.builtin.file', switchboard_token_file) | trim)[:16]
+      no_log: true
