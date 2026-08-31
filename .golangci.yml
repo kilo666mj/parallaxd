@@ -1,0 +1,15 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - "-SA1019"
+        - "-ST1000"
+        - "-QF*"
