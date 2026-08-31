@@ -203,6 +203,8 @@ func (c Check) Validate() error {
 		return fmt.Errorf("check %q: ca_file is only valid for HTTP, TLS, SMTP or gRPC checks", c.Name)
 	case c.CAFile != "" && !filepath.IsAbs(c.CAFile):
 		return fmt.Errorf("check %q: ca_file must be an absolute path on each prober", c.Name)
+	case c.CAFile != "" && !strings.HasPrefix(filepath.Clean(c.CAFile), "/etc/parallaxd/ca/"):
+		return fmt.Errorf("check %q: ca_file must be beneath /etc/parallaxd/ca", c.Name)
 	case c.TLSExpiryWarning < 0:
 		return fmt.Errorf("check %q: tls_expiry_warning cannot be negative", c.Name)
 	case c.TLSExpiryWarning > 0 && c.Kind != KindTLS:

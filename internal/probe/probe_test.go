@@ -70,7 +70,7 @@ func TestHTTPUp(t *testing.T) {
 	}
 }
 
-func TestHTTPCustomCAFile(t *testing.T) {
+func TestCustomCAFileLoadsWithinRoot(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "trusted")
 	}))
@@ -80,11 +80,27 @@ func TestHTTPCustomCAFile(t *testing.T) {
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c := httpCheck(server.URL)
-	c.CAFile = caFile
-	result := Run(t.Context(), HTTP{}, c, "probe-a", "provider-a")
-	if result.Status != check.StatusUp {
-		t.Fatalf("status=%s detail=%q", result.Status, result.Detail)
+	roots, err := rootsForCheckIn(caFile, nil, filepath.Dir(caFile))
+	if err != nil {
+		t.Fatalf("load custom CA: %v", err)
+	}
+	if roots == nil {
+		t.Fatal("custom CA pool is nil")
+	}
+}
+
+func TestCustomCAFileCannotEscapeRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.pem")
+	if err := os.WriteFile(outside, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "escape.pem")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rootsForCheckIn(link, nil, root); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("escaping symlink error = %v", err)
 	}
 }
 

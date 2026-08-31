@@ -119,6 +119,10 @@ func TestCAFileValidation(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid ca_file rejected: %v", err)
 	}
+	c.CAFile = "/etc/parallaxd/ca/../../shadow"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "beneath /etc/parallaxd/ca") {
+		t.Fatalf("escaping ca_file error = %v", err)
+	}
 	c.Kind = KindTCP
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "only valid") {
 		t.Fatalf("TCP ca_file error = %v", err)
