@@ -72,14 +72,14 @@ func TestTLSFixtureValidatesTrustNameAndPeerDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go func() { defer conn.Close(); _ = conn.(*tls.Conn).Handshake() }()
+			go func() { defer func() { _ = conn.Close() }(); _ = conn.(*tls.Conn).Handshake() }()
 		}
 	}()
 
@@ -105,7 +105,7 @@ func TestDNSFixtureReturnsAndMatchesARecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	go func() {
 		for range 2 { // LookupIPAddr asks for A and AAAA.
 			buf := make([]byte, 512)
@@ -153,29 +153,29 @@ func TestSMTPFixtureExercisesGreetingEHLOAndNOOP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	commands := make(chan string, 8)
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
-		fmt.Fprint(conn, "220 fixture ESMTP ready\r\n")
+		defer func() { _ = conn.Close() }()
+		_, _ = fmt.Fprint(conn, "220 fixture ESMTP ready\r\n")
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
 			line := scanner.Text()
 			commands <- line
 			switch {
 			case strings.HasPrefix(line, "EHLO "):
-				fmt.Fprint(conn, "250-fixture\r\n250 HELP\r\n")
+				_, _ = fmt.Fprint(conn, "250-fixture\r\n250 HELP\r\n")
 			case line == "NOOP":
-				fmt.Fprint(conn, "250 OK\r\n")
+				_, _ = fmt.Fprint(conn, "250 OK\r\n")
 			case line == "QUIT":
-				fmt.Fprint(conn, "221 bye\r\n")
+				_, _ = fmt.Fprint(conn, "221 bye\r\n")
 				return
 			default:
-				fmt.Fprint(conn, "500 unexpected\r\n")
+				_, _ = fmt.Fprint(conn, "500 unexpected\r\n")
 			}
 		}
 	}()
@@ -204,7 +204,7 @@ func TestSMTPFixtureExercisesSTARTTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	done := make(chan error, 1)
 	go func() {
 		conn, err := ln.Accept()
@@ -212,21 +212,21 @@ func TestSMTPFixtureExercisesSTARTTLS(t *testing.T) {
 			done <- err
 			return
 		}
-		defer conn.Close()
-		fmt.Fprint(conn, "220 fixture ESMTP ready\r\n")
+		defer func() { _ = conn.Close() }()
+		_, _ = fmt.Fprint(conn, "220 fixture ESMTP ready\r\n")
 		reader := bufio.NewReader(conn)
 		line, err := reader.ReadString('\n')
 		if err != nil || !strings.HasPrefix(line, "EHLO ") {
 			done <- fmt.Errorf("initial EHLO: %q: %w", line, err)
 			return
 		}
-		fmt.Fprint(conn, "250-fixture\r\n250 STARTTLS\r\n")
+		_, _ = fmt.Fprint(conn, "250-fixture\r\n250 STARTTLS\r\n")
 		line, err = reader.ReadString('\n')
 		if err != nil || strings.TrimSpace(line) != "STARTTLS" {
 			done <- fmt.Errorf("STARTTLS: %q: %w", line, err)
 			return
 		}
-		fmt.Fprint(conn, "220 begin TLS\r\n")
+		_, _ = fmt.Fprint(conn, "220 begin TLS\r\n")
 		tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
 		if err := tlsConn.Handshake(); err != nil {
 			done <- err
@@ -241,11 +241,11 @@ func TestSMTPFixtureExercisesSTARTTLS(t *testing.T) {
 			}
 			switch {
 			case strings.HasPrefix(line, "EHLO "):
-				fmt.Fprint(tlsConn, "250 fixture\r\n")
+				_, _ = fmt.Fprint(tlsConn, "250 fixture\r\n")
 			case strings.TrimSpace(line) == "NOOP":
-				fmt.Fprint(tlsConn, "250 OK\r\n")
+				_, _ = fmt.Fprint(tlsConn, "250 OK\r\n")
 			case strings.TrimSpace(line) == "QUIT":
-				fmt.Fprint(tlsConn, "221 bye\r\n")
+				_, _ = fmt.Fprint(tlsConn, "221 bye\r\n")
 				done <- nil
 				return
 			default:

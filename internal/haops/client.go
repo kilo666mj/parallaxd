@@ -124,7 +124,7 @@ func (c Client) getJSON(ctx context.Context, path string, dst any) error {
 	return c.doJSON(req, dst)
 }
 
-func (c Client) doJSON(req *http.Request, dst any) error {
+func (c Client) doJSON(req *http.Request, dst any) (err error) {
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
@@ -133,7 +133,7 @@ func (c Client) doJSON(req *http.Request, dst any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("coordinator returned %s: %s", resp.Status, strings.TrimSpace(string(message)))

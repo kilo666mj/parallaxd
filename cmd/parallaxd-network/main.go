@@ -48,7 +48,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "install":
 		return install(args[1:], stdout, stderr)
 	case "version", "--version", "-version":
-		fmt.Fprintln(stdout, version)
+		if _, err := fmt.Fprintln(stdout, version); err != nil {
+			return err
+		}
 		return nil
 	case "help", "-h", "--help":
 		usage(stdout)
@@ -60,7 +62,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, `Usage: parallaxd-network COMMAND [options]
+	// Usage text on the way out; there is no caller left to tell.
+	_, _ = fmt.Fprintln(w, `Usage: parallaxd-network COMMAND [options]
 
 Commands:
   key-init   Ensure a local automation keypair exists
@@ -86,7 +89,9 @@ func keyInit(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if pair, err := wgnet.LoadKeyPair(*stateDir); err == nil {
-		fmt.Fprintln(stdout, pair.PublicKey)
+		if _, err := fmt.Fprintln(stdout, pair.PublicKey); err != nil {
+			return err
+		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -98,7 +103,9 @@ func keyInit(args []string, stdout, stderr io.Writer) error {
 				if pairErr != nil {
 					return pairErr
 				}
-				fmt.Fprintln(stdout, pair.PublicKey)
+				if _, err := fmt.Fprintln(stdout, pair.PublicKey); err != nil {
+					return err
+				}
 				return nil
 			}
 		}
@@ -125,7 +132,9 @@ func keyInit(args []string, stdout, stderr io.Writer) error {
 	if err := wgnet.SaveKeyPair(*stateDir, pair); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, pair.PublicKey)
+	if _, err := fmt.Fprintln(stdout, pair.PublicKey); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -140,7 +149,9 @@ func publicKey(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, pair.PublicKey)
+	if _, err := fmt.Fprintln(stdout, pair.PublicKey); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -191,7 +202,9 @@ func reconcile(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	fmt.Fprintf(stdout, "{\"changed\":%t,\"interface\":%q}\n", changed, next.Interface)
+	if _, err := fmt.Fprintf(stdout, "{\"changed\":%t,\"interface\":%q}\n", changed, next.Interface); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -226,7 +239,9 @@ func hubInit(args []string, stdout, stderr io.Writer) error {
 	if err := wgnet.SaveJSON(path, invitation, 0644); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Created private hub state in %s\nShare only %s\n", *stateDir, path)
+	if _, err := fmt.Fprintf(stdout, "Created private hub state in %s\nShare only %s\n", *stateDir, path); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -263,7 +278,9 @@ func peerInit(args []string, stdout, stderr io.Writer) error {
 	if err := wgnet.SaveJSON(path, request, 0644); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Created private peer state in %s\nReturn only %s to the hub operator\n", *stateDir, path)
+	if _, err := fmt.Fprintf(stdout, "Created private peer state in %s\nReturn only %s to the hub operator\n", *stateDir, path); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -292,7 +309,9 @@ func authorize(args []string, stdout, stderr io.Writer) error {
 	if err := wgnet.SaveState(*stateDir, s); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Authorized %s at %s; render and install the updated hub configuration\n", request.Name, request.Address)
+	if _, err := fmt.Fprintf(stdout, "Authorized %s at %s; render and install the updated hub configuration\n", request.Name, request.Address); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -318,7 +337,9 @@ func render(args []string, stdout, stderr io.Writer) error {
 	if err := wgnet.WriteConfig(*output, config); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Wrote %s for interface %s\n", *output, s.Interface)
+	if _, err := fmt.Fprintf(stdout, "Wrote %s for interface %s\n", *output, s.Interface); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -344,7 +365,8 @@ func install(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	// Best effort: a leftover scratch directory is not worth failing on.
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	candidate := filepath.Join(tmpDir, s.Interface+".conf")
 	if err := wgnet.WriteConfig(candidate, config); err != nil {
 		return err
@@ -387,7 +409,9 @@ func install(args []string, stdout, stderr io.Writer) error {
 		}
 		changed = true
 	}
-	fmt.Fprintf(stdout, "{\"changed\":%t,\"installed\":%q,\"unit\":%q}\n", changed, destination, unit)
+	if _, err := fmt.Fprintf(stdout, "{\"changed\":%t,\"installed\":%q,\"unit\":%q}\n", changed, destination, unit); err != nil {
+		return err
+	}
 	return nil
 }
 

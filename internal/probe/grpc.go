@@ -59,7 +59,7 @@ func (g GRPC) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		status, detail := classify(err)
 		return status, 0, detail
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	response, err := grpc_health_v1.NewHealthClient(conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: c.GRPCService})
 	if err != nil {
 		return check.StatusDown, time.Since(start), fmt.Sprintf("gRPC health check: %v", err)

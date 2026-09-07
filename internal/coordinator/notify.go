@@ -246,7 +246,7 @@ type LogNotifier struct {
 	Logger *slog.Logger
 }
 
-func (n LogNotifier) Notify(_ context.Context, a Alert) error {
+func (n LogNotifier) Notify(_ context.Context, a Alert) (err error) {
 	log := n.Logger
 	if log == nil {
 		log = slog.Default()
@@ -311,7 +311,7 @@ type chatAttachment struct {
 	Footer   string      `json:"footer,omitempty"`
 }
 
-func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
+func (n WebhookNotifier) Notify(ctx context.Context, a Alert) (err error) {
 	summary := a.Summary()
 	text := summary
 	var attachments []chatAttachment
@@ -368,7 +368,7 @@ func (n WebhookNotifier) Notify(ctx context.Context, a Alert) error {
 		}
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("webhook returned %s", resp.Status)
 	}
@@ -428,7 +428,7 @@ func alertColor(kind Kind) string {
 // rest: an unreachable webhook must not also cost the log line.
 type Notifiers []Notifier
 
-func (ns Notifiers) Notify(ctx context.Context, a Alert) error {
+func (ns Notifiers) Notify(ctx context.Context, a Alert) (err error) {
 	var errs []string
 	for _, n := range ns {
 		if err := n.Notify(ctx, a); err != nil {

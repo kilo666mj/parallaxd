@@ -41,9 +41,14 @@ func (n NTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 		status, detail := classify(err)
 		return status, 0, detail
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Without the deadline this probe could outlast its own budget.
+			// That is this prober failing to ask, not evidence about the
+			// target, so it is Unknown rather than Down.
+			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+		}
 	}
 	request := make([]byte, 48)
 	request[0] = 0x23 // version 4, client mode
@@ -242,9 +247,11 @@ func (d DNS) exchangeDNS(ctx context.Context, vantage check.Vantage, network, se
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, fmt.Errorf("set probe deadline: %w", err)
+		}
 	}
 	if network == "tcp" {
 		framed := make([]byte, len(query)+2)
@@ -375,7 +382,7 @@ func (t TLS) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 		s, d := classify(err)
 		return s, 0, d
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	tc := tls.Client(conn, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: roots})
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return check.StatusDown, time.Since(start), fmt.Sprintf("TLS handshake: %v", err)
@@ -423,14 +430,19 @@ func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		return st, 0, d
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Without the deadline this probe could outlast its own budget.
+			// That is this prober failing to ask, not evidence about the
+			// target, so it is Unknown rather than Down.
+			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+		}
 	}
 	client, err := smtp.NewClient(conn, name)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP greeting: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.Hello("parallaxd.local"); err != nil {
 		return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP EHLO: %v", err)
 	}
@@ -442,7 +454,7 @@ func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 	if err := client.Noop(); err != nil {
 		return check.StatusDown, time.Since(start), fmt.Sprintf("SMTP NOOP: %v", err)
 	}
-	client.Quit()
+	_ = client.Quit()
 	return check.StatusUp, time.Since(start), "SMTP greeting, EHLO and NOOP succeeded"
 }
 
@@ -489,9 +501,14 @@ func (p ICMP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 	if err != nil {
 		return check.StatusUnknown, 0, fmt.Sprintf("open ICMP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Without the deadline this probe could outlast its own budget.
+			// That is this prober failing to ask, not evidence about the
+			// target, so it is Unknown rather than Down.
+			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+		}
 	}
 	seq := int(icmpSequence.Add(1) & 0xffff)
 	msg := icmp.Message{Type: echo, Body: &icmp.Echo{Seq: seq, Data: []byte(icmpPayload)}}

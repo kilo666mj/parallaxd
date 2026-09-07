@@ -100,7 +100,7 @@ func checksEqual(a, b check.Check) bool {
 	return string(aa) == string(bb)
 }
 
-func (p *Prober) fetchAssignments(ctx context.Context, cfg AssignmentConfig) ([]check.Check, error) {
+func (p *Prober) fetchAssignments(ctx context.Context, cfg AssignmentConfig) (_ []check.Check, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimRight(cfg.CoordinatorURL, "/")+"/v1/checks", nil)
 	if err != nil {
@@ -119,7 +119,7 @@ func (p *Prober) fetchAssignments(ctx context.Context, cfg AssignmentConfig) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("coordinator returned %s", resp.Status)
 	}

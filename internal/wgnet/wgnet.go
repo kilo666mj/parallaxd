@@ -509,18 +509,17 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	// Best effort: on the success path the rename has already consumed
+	// this name, so the remove is expected to fail with ENOENT.
+	defer func() { _ = os.Remove(tmp) }()
 	if err := f.Chmod(mode); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, closeError("close temporary config", f.Close))
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, closeError("close temporary config", f.Close))
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, closeError("close temporary config", f.Close))
 	}
 	if err := f.Close(); err != nil {
 		return err

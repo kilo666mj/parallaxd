@@ -48,7 +48,7 @@ func TestICMPReplyAllowsKernelRewrittenID(t *testing.T) {
 
 func TestHTTPUp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "all good")
+		_, _ = fmt.Fprint(w, "all good")
 	}))
 	defer srv.Close()
 
@@ -72,7 +72,7 @@ func TestHTTPUp(t *testing.T) {
 
 func TestCustomCAFileLoadsWithinRoot(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "trusted")
+		_, _ = fmt.Fprint(w, "trusted")
 	}))
 	defer server.Close()
 	caFile := filepath.Join(t.TempDir(), "ca.pem")
@@ -147,7 +147,7 @@ func TestHTTPMethodHeadersAndBody(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, "accepted")
+		_, _ = fmt.Fprint(w, "accepted")
 	}))
 	defer srv.Close()
 	c := httpCheck(srv.URL)
@@ -166,7 +166,7 @@ func TestHTTPMethodHeadersAndBody(t *testing.T) {
 // is the only way a probe can tell.
 func TestHTTPBodyMatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "<h1>Service Temporarily Unavailable</h1>")
+		_, _ = fmt.Fprint(w, "<h1>Service Temporarily Unavailable</h1>")
 	}))
 	defer srv.Close()
 
@@ -213,7 +213,7 @@ func TestTCPUpAndDown(t *testing.T) {
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -221,7 +221,7 @@ func TestTCPUpAndDown(t *testing.T) {
 		t.Errorf("status = %q (%s), want up against a listener", r.Status, r.Detail)
 	}
 
-	ln.Close()
+	_ = ln.Close()
 	r := Run(t.Context(), TCP{}, tcpCheck(addr), "probe-a", "")
 	if r.Status != check.StatusDown {
 		t.Errorf("status = %q, want down once the listener is gone", r.Status)
@@ -334,7 +334,7 @@ func bannerServer(t *testing.T, greeting string) (addr string, sent <-chan strin
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	got := make(chan string, 4)
 	go func() {
@@ -344,11 +344,11 @@ func bannerServer(t *testing.T, greeting string) (addr string, sent <-chan strin
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				if greeting != "" {
-					conn.Write([]byte(greeting))
+					_, _ = conn.Write([]byte(greeting))
 				}
-				conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 				buf := make([]byte, 64)
 				n, _ := conn.Read(buf)
 				got <- string(buf[:n])
@@ -449,7 +449,7 @@ func TestBannerRefusedIsDown(t *testing.T) {
 	// Reuse the address after closing so nothing is listening.
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	dead := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 	_ = addr
 
 	r := Run(t.Context(), Banner{}, bannerCheck(dead, "Postfix"), "probe-a", "")

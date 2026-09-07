@@ -62,7 +62,7 @@ func (c Client) Delete(ctx context.Context, path string, body any) error {
 	return c.do(ctx, http.MethodDelete, path, body, nil)
 }
 
-func (c Client) do(ctx context.Context, method, path string, body, out any) error {
+func (c Client) do(ctx context.Context, method, path string, body, out any) (err error) {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -90,7 +90,7 @@ func (c Client) do(ctx context.Context, method, path string, body, out any) erro
 	if err != nil {
 		return fmt.Errorf("call coordinator: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("coordinator returned %s: %s", resp.Status, strings.TrimSpace(string(message)))

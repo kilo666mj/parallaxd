@@ -171,7 +171,7 @@ func (p *Prober) probePeers(ctx context.Context, peers []MeshPeer, cfg MeshConfi
 			} else {
 				view.Reachable = true
 				view.Latency = p.nowFunc().Sub(start)
-				conn.Close()
+				_ = conn.Close()
 			}
 
 			mu.Lock()
@@ -183,7 +183,7 @@ func (p *Prober) probePeers(ctx context.Context, peers []MeshPeer, cfg MeshConfi
 	return out
 }
 
-func (p *Prober) fetchPeers(ctx context.Context, cfg MeshConfig) ([]MeshPeer, error) {
+func (p *Prober) fetchPeers(ctx context.Context, cfg MeshConfig) (_ []MeshPeer, err error) {
 	url := strings.TrimRight(cfg.CoordinatorURL, "/") + "/v1/peers"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -203,7 +203,7 @@ func (p *Prober) fetchPeers(ctx context.Context, cfg MeshConfig) ([]MeshPeer, er
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("coordinator returned %s", resp.Status)
 	}
@@ -223,7 +223,7 @@ func (p *Prober) fetchPeers(ctx context.Context, cfg MeshConfig) ([]MeshPeer, er
 	return peers, nil
 }
 
-func (p *Prober) submitMesh(ctx context.Context, cfg MeshConfig, r mesh.Report) error {
+func (p *Prober) submitMesh(ctx context.Context, cfg MeshConfig, r mesh.Report) (err error) {
 	env, err := wire.SignMeshReport(p.cfg.Key, r)
 	if err != nil {
 		return err
@@ -244,7 +244,7 @@ func (p *Prober) submitMesh(ctx context.Context, cfg MeshConfig, r mesh.Report) 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("coordinator returned %s", resp.Status)
 	}
