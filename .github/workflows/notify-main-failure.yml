@@ -1,0 +1,77 @@
+name: notify main failure
+
+# Opens a tracking issue when any workflow fails on main, and closes it once a
+# later run of that workflow succeeds. Enabled after a lint failure sat unnoticed
+# on gatehub's main for four days and silently blocked every open Renovate PR.
+
+on:
+  workflow_run:
+    # workflow_run requires an explicit list; it has no "all workflows" form.
+    # These are this repository's own committed workflows. CodeQL default setup
+    # is a dynamic workflow and cannot be named here.
+    workflows: [build, security]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  issues: write
+
+jobs:
+  notify:
+    # Never react to this workflow's own runs.
+    if: github.event.workflow_run.name != 'notify main failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const {owner, repo} = context.repo;
+
+            // One issue per workflow, found by this marker rather than by title
+            // so a renamed workflow still matches its existing issue.
+            const marker = `<!-- ci-failure-tracker:${run.workflow_id} -->`;
+
+            const existing = (await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', labels: 'ci-failure', per_page: 100,
+            })).find(i => i.body && i.body.includes(marker));
+
+            if (run.conclusion === 'success') {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: `Recovered: [\`${run.name}\` #${run.run_number}](${run.html_url}) succeeded on main at ${run.head_sha.slice(0, 7)}.`,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number, state: 'closed', state_reason: 'completed',
+                });
+              }
+              return;
+            }
+
+            // Anything that is neither success nor failure (cancelled, skipped,
+            // stale) says nothing about the health of main.
+            if (run.conclusion !== 'failure') return;
+
+            const body = [
+              marker,
+              `Workflow **${run.name}** failed on \`main\`.`,
+              '',
+              `- Run: [#${run.run_number}](${run.html_url})`,
+              `- Commit: ${run.head_sha.slice(0, 7)}`,
+              '',
+              'This issue closes automatically when a later run of this workflow succeeds on main.',
+              'A red main also blocks every open PR whose checks are required, Renovate included.',
+            ].join('\n');
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `Still failing: [#${run.run_number}](${run.html_url}) at ${run.head_sha.slice(0, 7)}.`,
+              });
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner, repo, title: `CI failing on main: ${run.name}`, body, labels: ['ci-failure'],
+            });
