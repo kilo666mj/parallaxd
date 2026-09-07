@@ -407,6 +407,13 @@ type SMTP struct {
 	Dialer *net.Dialer
 	// RootCAs has the same trust semantics as TLS.RootCAs.
 	RootCAs *x509.CertPool
+
+	// wrapConn wraps the dialed connection before anything is done with it.
+	// It is unexported because it exists for tests: this probe hands its
+	// connection to smtp.Client partway through, and the only way to check
+	// that the earlier returns still close the socket is to supply one whose
+	// SetDeadline fails and whose closes can be counted.
+	wrapConn func(net.Conn) net.Conn
 }
 
 func (SMTP) Kind() check.Kind { return check.KindSMTP }
@@ -428,6 +435,9 @@ func (s SMTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 	if err != nil {
 		st, d := classify(err)
 		return st, 0, d
+	}
+	if s.wrapConn != nil {
+		conn = s.wrapConn(conn)
 	}
 	// smtp.Client takes ownership of conn once it exists and closes it from
 	// client.Close. Until then this function owns it, and every early return
