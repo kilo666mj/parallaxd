@@ -119,7 +119,7 @@ func (tt *toggleTarget) up(t *testing.T) {
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 }
@@ -128,7 +128,7 @@ func (tt *toggleTarget) down() {
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
 	if tt.ln != nil {
-		tt.ln.Close()
+		_ = tt.ln.Close()
 		tt.ln = nil
 	}
 }
@@ -557,7 +557,7 @@ func TestHandlerRejectsUnverifiedResults(t *testing.T) {
 			if err != nil {
 				t.Fatalf("post: %v", err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != http.StatusForbidden {
 				t.Errorf("status = %d, want 403", resp.StatusCode)
 			}
@@ -587,7 +587,7 @@ func TestHandlerAuthorizesAssignmentAndRejectsReplay(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return resp.StatusCode
 	}
 	forge := func(name string) wire.Envelope {
@@ -632,7 +632,7 @@ func TestHandlerRejectsMalformedAndOversized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("malformed body: status = %d, want 400", resp.StatusCode)
 	}
@@ -642,7 +642,7 @@ func TestHandlerRejectsMalformedAndOversized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusAccepted {
 		t.Error("an oversized body was accepted")
 	}
@@ -669,7 +669,7 @@ func TestEndToEndThroughTheHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -691,7 +691,7 @@ func TestEndToEndThroughTheHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status: %v", err)
 	}
-	defer statusResp.Body.Close()
+	defer func() { _ = statusResp.Body.Close() }()
 	var entries []StatusEntry
 	if err := json.NewDecoder(statusResp.Body).Decode(&entries); err != nil {
 		t.Fatalf("decode status: %v", err)

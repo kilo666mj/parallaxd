@@ -15,14 +15,14 @@ func TestPreflightAndPromote(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/diagnostics":
-			fmt.Fprintf(w, `{"result_queue":{"depth":0},"notifications":{"pending":0},"ha":{"role":"standby","active":false,"promoted":false,"last_replica_sync":%q,"replication_lag_ms":250}}`, now.Add(-time.Second).Format(time.RFC3339))
+			_, _ = fmt.Fprintf(w, `{"result_queue":{"depth":0},"notifications":{"pending":0},"ha":{"role":"standby","active":false,"promoted":false,"last_replica_sync":%q,"replication_lag_ms":250}}`, now.Add(-time.Second).Format(time.RFC3339))
 		case "/v1/ha/promote":
 			if r.Header.Get("Authorization") != "Bearer secret" {
 				http.Error(w, "bad token", http.StatusUnauthorized)
 				return
 			}
 			promoted = true
-			fmt.Fprint(w, `{"role":"standby","active":true,"promoted":true}`)
+			_, _ = fmt.Fprint(w, `{"role":"standby","active":true,"promoted":true}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -56,7 +56,7 @@ func TestPreflightRefusesUnsafeTargets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				fmt.Fprintf(w, `{"result_queue":{"depth":0},"notifications":{"pending":0},"ha":{%s}}`, tt.ha)
+				_, _ = fmt.Fprintf(w, `{"result_queue":{"depth":0},"notifications":{"pending":0},"ha":{%s}}`, tt.ha)
 			}))
 			defer srv.Close()
 			c := Client{BaseURL: srv.URL, Now: func() time.Time { return now }}
@@ -69,7 +69,7 @@ func TestPreflightRefusesUnsafeTargets(t *testing.T) {
 
 func TestPreflightRefusesQueuedWorkByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"result_queue":{"depth":1},"notifications":{"pending":2},"ha":{"role":"standby","last_replica_sync":"2026-08-11T12:00:00Z"}}`)
+		_, _ = fmt.Fprint(w, `{"result_queue":{"depth":1},"notifications":{"pending":2},"ha":{"role":"standby","last_replica_sync":"2026-08-11T12:00:00Z"}}`)
 	}))
 	defer srv.Close()
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)

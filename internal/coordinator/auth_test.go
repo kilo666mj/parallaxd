@@ -33,7 +33,7 @@ func authClient(t *testing.T, baseURL, username, password string) (*http.Client,
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login status=%d", resp.StatusCode)
 	}
@@ -115,7 +115,7 @@ func TestOIDCLoginMapsVerifiedIdentityToLocalRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/" {
 		t.Fatalf("OIDC redirect ended at %s with status %d", resp.Request.URL, resp.StatusCode)
 	}
@@ -123,7 +123,7 @@ func TestOIDCLoginMapsVerifiedIdentityToLocalRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var me struct {
 		Authenticated bool   `json:"authenticated"`
 		Username      string `json:"username"`
@@ -181,7 +181,7 @@ func TestLocalUsersSessionsRolesAndTokens(t *testing.T) {
 		t.Fatalf("admin principal=%+v", admin)
 	}
 	resp := authRequest(t, adminClient, http.MethodPost, srv.URL+"/v1/auth/password", admin.CSRF, map[string]any{"current_password": testPassword, "new_password": changedTestPassword})
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("change password status=%d", resp.StatusCode)
 	}
@@ -193,32 +193,32 @@ func TestLocalUsersSessionsRolesAndTokens(t *testing.T) {
 	// Cookie-authenticated mutations require the unguessable per-session CSRF
 	// value returned by login.
 	resp = authRequest(t, adminClient, http.MethodPost, srv.URL+"/v1/silences", "", map[string]any{"name": "deploy", "ends_at": time.Now().Add(time.Hour)})
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("mutation without CSRF status=%d", resp.StatusCode)
 	}
 
 	resp = authRequest(t, adminClient, http.MethodPost, srv.URL+"/v1/auth/users", admin.CSRF, map[string]any{"username": "reader", "password": testPassword, "role": RoleViewer})
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create viewer status=%d", resp.StatusCode)
 	}
 
 	viewerClient, viewer := authClient(t, srv.URL, "reader", testPassword)
 	resp = authRequest(t, viewerClient, http.MethodGet, srv.URL+"/v1/monitors", "", nil)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("viewer read status=%d", resp.StatusCode)
 	}
 	resp = authRequest(t, viewerClient, http.MethodPost, srv.URL+"/v1/silences", viewer.CSRF, map[string]any{"name": "forbidden", "ends_at": time.Now().Add(time.Hour)})
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("viewer mutation status=%d", resp.StatusCode)
 	}
 
 	resp = authRequest(t, adminClient, http.MethodPost, srv.URL+"/v1/auth/tokens", admin.CSRF, map[string]any{"name": "automation", "role": RoleOperator})
 	if resp.StatusCode != http.StatusCreated {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatalf("create token status=%d", resp.StatusCode)
 	}
 	var created struct {
@@ -227,7 +227,7 @@ func TestLocalUsersSessionsRolesAndTokens(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if created.Secret == "" {
 		t.Fatal("API token secret was not returned at creation")
 	}
@@ -238,7 +238,7 @@ func TestLocalUsersSessionsRolesAndTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("operator token mutation status=%d", resp.StatusCode)
 	}
@@ -247,7 +247,7 @@ func TestLocalUsersSessionsRolesAndTokens(t *testing.T) {
 	}
 
 	resp = authRequest(t, adminClient, http.MethodDelete, srv.URL+"/v1/auth/users/admin", admin.CSRF, nil)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("delete last admin status=%d", resp.StatusCode)
 	}
@@ -294,7 +294,7 @@ func TestUsersAndSessionsRestoreWithoutPlaintextSecrets(t *testing.T) {
 	srv := httptest.NewServer(c.Handler())
 	client, principal := authClient(t, srv.URL, "admin", testPassword)
 	resp := authRequest(t, client, http.MethodPost, srv.URL+"/v1/auth/users", principal.CSRF, map[string]any{"username": "operator", "password": testPassword, "role": RoleOperator})
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	srv.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create operator status=%d", resp.StatusCode)

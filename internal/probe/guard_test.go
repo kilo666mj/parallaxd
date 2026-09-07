@@ -160,10 +160,10 @@ func newCounted(t *testing.T) *counted {
 				return
 			}
 			c.hits.Add(1)
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	return c
 }
 

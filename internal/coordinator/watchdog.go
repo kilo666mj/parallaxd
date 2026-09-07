@@ -167,7 +167,9 @@ func (c *Coordinator) beat(ctx context.Context) {
 		c.beatFailed(ctx, err.Error())
 		return
 	}
-	defer resp.Body.Close()
+	// The body has been read; a close failure now is not evidence about
+	// anything this code reports.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		c.beatFailed(ctx, "watcher returned "+resp.Status)
 		return

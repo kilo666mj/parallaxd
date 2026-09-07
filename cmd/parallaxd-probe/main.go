@@ -189,9 +189,13 @@ func generateKey(w *os.File) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "# private key — write to the prober's key_file, mode 0600\n%s\n\n",
-		wire.EncodeKey(priv))
-	fmt.Fprintf(w, "# public key — register with the coordinator\n%s\n", wire.EncodeKey(pub))
+	if _, err := fmt.Fprintf(w, "# private key — write to the prober's key_file, mode 0600\n%s\n\n",
+		wire.EncodeKey(priv)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "# public key — register with the coordinator\n%s\n", wire.EncodeKey(pub)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -320,7 +324,7 @@ type submitter struct {
 	client *http.Client
 }
 
-func (s *submitter) Submit(ctx context.Context, env wire.Envelope) error {
+func (s *submitter) Submit(ctx context.Context, env wire.Envelope) (err error) {
 	body, err := json.Marshal(env)
 	if err != nil {
 		return err
@@ -334,7 +338,7 @@ func (s *submitter) Submit(ctx context.Context, env wire.Envelope) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("coordinator returned %s", resp.Status)
 	}

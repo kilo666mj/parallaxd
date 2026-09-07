@@ -20,7 +20,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	// The body has been read; a close failure now is not evidence about
+	// anything this code reports.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		fmt.Fprintln(os.Stderr, resp.Status)
 		os.Exit(1)

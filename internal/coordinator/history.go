@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -212,7 +213,8 @@ func (c *Coordinator) loadHistory() error {
 	if err != nil {
 		return fmt.Errorf("read history file: %w", err)
 	}
-	defer file.Close()
+	// Read-only: nothing was written, so a close failure changes nothing.
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 	dropped := false
@@ -265,10 +267,11 @@ func (c *Coordinator) compactHistoryLocked() error {
 		return err
 	}
 	name := tmp.Name()
-	defer os.Remove(name)
+	// Best effort: on the success path the rename has already consumed
+	// this name, so the remove is expected to fail with ENOENT.
+	defer func() { _ = os.Remove(name) }()
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, closeError("close temporary history", tmp.Close))
 	}
 	names := make([]string, 0, len(c.history))
 	for name := range c.history {
@@ -279,14 +282,12 @@ func (c *Coordinator) compactHistoryLocked() error {
 	for _, name := range names {
 		for _, observation := range c.history[name] {
 			if err := encoder.Encode(observation); err != nil {
-				tmp.Close()
-				return err
+				return errors.Join(err, closeError("close temporary history", tmp.Close))
 			}
 		}
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
+		return errors.Join(err, closeError("close temporary history", tmp.Close))
 	}
 	if err := tmp.Close(); err != nil {
 		return err

@@ -17,18 +17,18 @@ func TestRequestMatchesChunkedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, 4)
-		conn.Read(buf)
-		conn.Write([]byte("+PO"))
+		_, _ = conn.Read(buf)
+		_, _ = conn.Write([]byte("+PO"))
 		time.Sleep(5 * time.Millisecond)
-		conn.Write([]byte("NG\r\n"))
+		_, _ = conn.Write([]byte("NG\r\n"))
 	}()
 	c := testCheck(check.KindRequest, listener.Addr().String())
 	c.Send, c.ExpectBody = "PING", "+PONG"
@@ -43,7 +43,7 @@ func TestDNSQueriesExplicitServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	go func() {
 		buf := make([]byte, 512)
 		n, peer, err := server.ReadFrom(buf)
@@ -60,7 +60,7 @@ func TestDNSQueriesExplicitServer(t *testing.T) {
 			Answers:   []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: query.Questions[0].Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60}, Body: &dnsmessage.AResource{A: [4]byte{192, 0, 2, 42}}}},
 		}
 		raw, _ := answer.Pack()
-		server.WriteTo(raw, peer)
+		_, _ = server.WriteTo(raw, peer)
 	}()
 	c := testCheck(check.KindDNS, "fixture.example")
 	c.DNSServer, c.DNSRecord, c.ExpectBody = server.LocalAddr().String(), "A", "192.0.2.42"
@@ -75,7 +75,7 @@ func TestNTPValidatesServerReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	go func() {
 		request := make([]byte, 48)
 		n, peer, err := server.ReadFrom(request)
@@ -85,7 +85,7 @@ func TestNTPValidatesServerReply(t *testing.T) {
 		response := make([]byte, 48)
 		response[0], response[1] = 0x24, 2
 		copy(response[24:32], request[40:48])
-		server.WriteTo(response, peer)
+		_, _ = server.WriteTo(response, peer)
 	}()
 	c := testCheck(check.KindNTP, server.LocalAddr().String())
 	status, _, detail := (NTP{}).Probe(t.Context(), c)
@@ -103,7 +103,7 @@ func TestGRPCHealthServing(t *testing.T) {
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("fixture.Service", grpc_health_v1.HealthCheckResponse_SERVING)
 	grpc_health_v1.RegisterHealthServer(server, healthServer)
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()
 	c := testCheck(check.KindGRPC, listener.Addr().String())
 	c.GRPCService = "fixture.Service"

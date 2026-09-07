@@ -35,7 +35,7 @@ func TestStandbyReplicatesStateHistoryAndOutboxThenPromotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unauthorized.Body.Close()
+	_ = unauthorized.Body.Close()
 	if unauthorized.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthorized replica status=%d", unauthorized.StatusCode)
 	}

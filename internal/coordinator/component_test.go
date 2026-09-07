@@ -403,7 +403,7 @@ func getJSON(t *testing.T, url string, into any) {
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s: %s", url, resp.Status)
 	}
@@ -438,10 +438,12 @@ func TestSiblingChecksDoNotDeadlock(t *testing.T) {
 					// helper that calls t.Fatalf must not run off the test
 					// goroutine.
 					for _, s := range []check.Status{check.StatusDown, check.StatusUp} {
-						h.coord.Process(t.Context(), check.Result{
+						if _, err := h.coord.Process(t.Context(), check.Result{
 							Check: name, Prober: "probe-a", Provider: "one",
 							Vantage: check.VantageInternal, Status: s, At: time.Now().UTC(),
-						})
+						}); err != nil {
+							t.Errorf("Process: %v", err)
+						}
 					}
 				}(name)
 			}

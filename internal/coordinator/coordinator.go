@@ -860,7 +860,7 @@ func (c *Coordinator) corroborators(chk check.Check, reported check.Result) []Pe
 }
 
 // ask sends one signed corroboration request and verifies the answer.
-func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (check.Result, error) {
+func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (_ check.Result, err error) {
 	id, err := wire.NewRequestID()
 	if err != nil {
 		return check.Result{}, err
@@ -888,7 +888,7 @@ func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (check.R
 	if err != nil {
 		return check.Result{}, err
 	}
-	defer resp.Body.Close()
+	defer closeWithError(&err, "close response body", resp.Body.Close)
 	if resp.StatusCode/100 != 2 {
 		return check.Result{}, fmt.Errorf("prober returned %s", resp.Status)
 	}

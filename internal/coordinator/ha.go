@@ -159,7 +159,9 @@ func (c *Coordinator) syncReplica(ctx context.Context) {
 		}
 		response, err = client.Do(req)
 		if err == nil {
-			defer response.Body.Close()
+			// The body has been read; a close failure now is not evidence about
+			// anything this code reports.
+			defer func() { _ = response.Body.Close() }()
 			if response.StatusCode/100 != 2 {
 				err = fmt.Errorf("primary returned %s", response.Status)
 			} else {

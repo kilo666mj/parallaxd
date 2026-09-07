@@ -183,7 +183,8 @@ func (p *Prober) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/probe", p.handleProbe)
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"prober": p.cfg.Name, "status": "ok"})
+		// Status already sent; a client that hung up mid-body is not reportable.
+		_ = json.NewEncoder(w).Encode(map[string]string{"prober": p.cfg.Name, "status": "ok"})
 	})
 	return mux
 }

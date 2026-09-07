@@ -228,7 +228,7 @@ func TestOperatorEndpointsRequireBearerAndRecordActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d", resp.StatusCode)
 	}
@@ -239,7 +239,7 @@ func TestOperatorEndpointsRequireBearerAndRecordActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("authorized status=%d", resp.StatusCode)
 	}
@@ -259,7 +259,7 @@ func TestOperatorEndpointsAreDisabledByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d, want operator API disabled", resp.StatusCode)
 	}
@@ -333,13 +333,13 @@ func TestDiagnosticsExposeRejectionsAssignmentsAndNotifierFailure(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	diagnosticResp, err := http.Get(srv.URL + "/v1/diagnostics")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer diagnosticResp.Body.Close()
+	defer func() { _ = diagnosticResp.Body.Close() }()
 	var got Diagnostics
 	if err := json.NewDecoder(diagnosticResp.Body).Decode(&got); err != nil {
 		t.Fatal(err)

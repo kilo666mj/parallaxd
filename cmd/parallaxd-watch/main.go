@@ -166,7 +166,8 @@ func run(configPath string, log *slog.Logger) error {
 	})
 	mux.HandleFunc("GET /v1/status", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(w.State())
+		// Status already sent; a client that hung up mid-body is not reportable.
+		_ = json.NewEncoder(rw).Encode(w.State())
 	})
 
 	srv := &http.Server{

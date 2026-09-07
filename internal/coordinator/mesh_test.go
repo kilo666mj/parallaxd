@@ -40,7 +40,7 @@ func (h *harness) submitMesh(t *testing.T, srv *httptest.Server, from string, pe
 	if err != nil {
 		t.Fatalf("POST /v1/mesh: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
 }
 
@@ -243,7 +243,7 @@ func TestUnsignedMeshReportIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %s, want 403", resp.Status)
 	}
@@ -271,7 +271,7 @@ func TestMeshReportCannotSpeakForAnotherProber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %s, want 403 — probe-a signed a report claiming to be probe-b", resp.Status)
 	}
@@ -307,7 +307,7 @@ func (h *harness) getPeers(t *testing.T, srv *httptest.Server, cred string) (int
 	if err != nil {
 		t.Fatalf("GET /v1/peers: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return resp.StatusCode, nil
 	}
@@ -416,14 +416,20 @@ func TestAssignmentFeedRequiresIdentityAndFailsOverIsolation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var got []check.Check
 		if resp.StatusCode == http.StatusOK {
 			var env wire.Envelope
-			json.NewDecoder(resp.Body).Decode(&env)
+			if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+				t.Fatalf("decode envelope: %v", err)
+			}
 			var doc wire.PublishedDocument
-			json.Unmarshal(env.Payload, &doc)
-			json.Unmarshal(doc.Data, &got)
+			if err := json.Unmarshal(env.Payload, &doc); err != nil {
+				t.Fatalf("decode published document: %v", err)
+			}
+			if err := json.Unmarshal(doc.Data, &got); err != nil {
+				t.Fatalf("decode checks: %v", err)
+			}
 		}
 		return resp.StatusCode, got
 	}

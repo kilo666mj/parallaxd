@@ -39,10 +39,10 @@ func newCountingListener(t *testing.T) *countingListener {
 				return
 			}
 			c.count.Add(1)
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	return c
 }
 
@@ -135,7 +135,7 @@ func (f *fixture) post(t *testing.T, env wire.Envelope) *http.Response {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
 }
 
@@ -291,7 +291,7 @@ func TestDownTargetIsReportedNotErrored(t *testing.T) {
 	f := newFixture(t)
 	target := newCountingListener(t)
 	addr := target.addr()
-	target.ln.Close()
+	_ = target.ln.Close()
 
 	resp := f.post(t, f.signedRequest(t, tcpCheck(addr)))
 	if resp.StatusCode != http.StatusOK {
@@ -340,7 +340,7 @@ func TestMalformedBodyIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
@@ -355,7 +355,7 @@ func TestOversizedBodyIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusOK {
 		t.Errorf("status = %d, want an oversized body refused", resp.StatusCode)
 	}
@@ -459,7 +459,7 @@ func TestHealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}

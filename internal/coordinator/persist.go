@@ -73,7 +73,9 @@ func (c *Coordinator) persistState() error {
 		return fmt.Errorf("create state file: %w", err)
 	}
 	name := tmp.Name()
-	defer os.Remove(name)
+	// Best effort: on the success path the rename has already consumed
+	// this name, so the remove is expected to fail with ENOENT.
+	defer func() { _ = os.Remove(name) }()
 	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(raw)
 	}

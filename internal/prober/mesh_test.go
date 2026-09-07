@@ -59,7 +59,7 @@ func newFakeCoordinator(t *testing.T, p *Prober, proberName string, pub []byte) 
 			http.Error(w, "sign", http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	})
 	mux.HandleFunc("POST /v1/mesh", func(w http.ResponseWriter, r *http.Request) {
 		var env wire.Envelope
@@ -109,7 +109,7 @@ func listener(t *testing.T) (string, func()) {
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 	addr := ln.Addr().String()
@@ -117,7 +117,7 @@ func listener(t *testing.T) (string, func()) {
 	return addr, func() {
 		if !closed {
 			closed = true
-			ln.Close()
+			_ = ln.Close()
 		}
 	}
 }

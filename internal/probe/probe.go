@@ -180,7 +180,7 @@ func (t TCP) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 		status, detail := classify(err)
 		return status, 0, detail
 	}
-	conn.Close()
+	_ = conn.Close()
 	return check.StatusUp, latency, ""
 }
 
@@ -257,7 +257,9 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		status, detail := classify(err)
 		return status, 0, detail
 	}
-	defer resp.Body.Close()
+	// The body has been read; a close failure now is not evidence about
+	// anything this code reports.
+	defer func() { _ = resp.Body.Close() }()
 
 	if !statusAcceptable(resp.StatusCode, c.ExpectStatus) {
 		return check.StatusDown, latency, fmt.Sprintf("HTTP %s", resp.Status)
@@ -328,9 +330,14 @@ func (r Request) Probe(ctx context.Context, c check.Check) (check.Status, time.D
 		status, detail := classify(err)
 		return status, 0, detail
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Without the deadline this probe could outlast its own budget.
+			// That is this prober failing to ask, not evidence about the
+			// target, so it is Unknown rather than Down.
+			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+		}
 	}
 	if _, err := io.WriteString(conn, c.Send); err != nil {
 		status, detail := classify(err)
@@ -365,12 +372,17 @@ func (b Banner) Probe(ctx context.Context, c check.Check) (check.Status, time.Du
 		status, detail := classify(err)
 		return status, 0, detail
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// The context carries the check's timeout; push it down to the socket so
 	// a server that accepts and then says nothing cannot outlast it.
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Without the deadline this probe could outlast its own budget.
+			// That is this prober failing to ask, not evidence about the
+			// target, so it is Unknown rather than Down.
+			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+		}
 	}
 
 	line, err := bufio.NewReaderSize(conn, maxBannerRead).ReadString('\n')
@@ -390,7 +402,7 @@ func (b Banner) Probe(ctx context.Context, c check.Check) (check.Status, time.Du
 	// Hang up politely. Best effort: the check has already succeeded, and a
 	// failure to say goodbye says nothing about the target.
 	if c.Send != "" {
-		conn.Write([]byte(c.Send))
+		_, _ = conn.Write([]byte(c.Send))
 	}
 	return check.StatusUp, latency, ""
 }

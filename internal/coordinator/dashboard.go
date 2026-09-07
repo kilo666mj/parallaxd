@@ -134,7 +134,8 @@ func (c *Coordinator) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Frame-Options", "DENY")
-	fmt.Fprint(w, dashboardHTML)
+	// Status already sent; a client that hung up mid-body is not reportable.
+	_, _ = fmt.Fprint(w, dashboardHTML)
 }
 
 func (c *Coordinator) handleIcon(w http.ResponseWriter, _ *http.Request) {
