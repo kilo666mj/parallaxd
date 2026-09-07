@@ -85,6 +85,19 @@ func Run(ctx context.Context, p Prober, c check.Check, prober, provider string) 
 	return r
 }
 
+// proberSetupError marks a failure to prepare this prober's own socket —
+// setting a deadline, say. Like a blocked target it is a statement about this
+// prober, not about the target, so it must never become a vote for Down. It is
+// a distinct type rather than a formatted string because classify recognises
+// causes by type, and a plain fmt.Errorf here falls through to Down.
+type proberSetupError struct {
+	op  string
+	err error
+}
+
+func (e *proberSetupError) Error() string { return fmt.Sprintf("%s: %v", e.op, e.err) }
+func (e *proberSetupError) Unwrap() error { return e.err }
+
 // classify decides whether a failed attempt is evidence about the target or
 // only about this prober.
 //
@@ -114,6 +127,13 @@ func classify(err error) (check.Status, string) {
 	var blocked *blockedTarget
 	if errors.As(err, &blocked) {
 		return check.StatusUnknown, blocked.Error()
+	}
+
+	// This prober could not set its own socket up. It never got as far as
+	// asking, so it has learned nothing about the target.
+	var setup *proberSetupError
+	if errors.As(err, &setup) {
+		return check.StatusUnknown, setup.Error()
 	}
 
 	// A name that will not resolve is a statement about DNS, which may be
@@ -336,7 +356,7 @@ func (r Request) Probe(ctx context.Context, c check.Check) (check.Status, time.D
 			// Without the deadline this probe could outlast its own budget.
 			// That is this prober failing to ask, not evidence about the
 			// target, so it is Unknown rather than Down.
-			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+			return check.StatusUnknown, 0, (&proberSetupError{op: "set probe deadline", err: err}).Error()
 		}
 	}
 	if _, err := io.WriteString(conn, c.Send); err != nil {
@@ -381,7 +401,7 @@ func (b Banner) Probe(ctx context.Context, c check.Check) (check.Status, time.Du
 			// Without the deadline this probe could outlast its own budget.
 			// That is this prober failing to ask, not evidence about the
 			// target, so it is Unknown rather than Down.
-			return check.StatusUnknown, 0, fmt.Sprintf("set probe deadline: %v", err)
+			return check.StatusUnknown, 0, (&proberSetupError{op: "set probe deadline", err: err}).Error()
 		}
 	}
 
