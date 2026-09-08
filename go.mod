@@ -10,7 +10,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	google.golang.org/grpc v1.83.2
 )
 
