@@ -8,6 +8,11 @@
     {
       "name": "{{ host }}",
       "url": "http://{{ hostvars[host]['parallaxd_address'] }}:{{ parallaxd_prober_port }}",
+      "proxy_profiles": {
+{% for name, profile in (hostvars[host]['parallaxd_proxy_profiles'] | default({})).items() %}
+        {{ name | to_json }}: {{ profile.egress | to_json }}{{ "," if not loop.last }}
+{% endfor %}
+      },
       "provider": "{{ hostvars[host]['parallaxd_provider'] }}",
       "public_key": "{{ (parallaxd_coordinator_prober_keys.results | selectattr('item', 'equalto', host) | map(attribute='content') | first | b64decode | trim) }}"
     }{{ "," if not loop.last }}
@@ -76,6 +81,9 @@
   "history_file": "{{ parallaxd_history_file }}",
   "history_retention": "{{ parallaxd_history_retention }}",
 	"history_max_per_check": {{ parallaxd_history_max_per_check }},
+{% if parallaxd_prometheus_sources | length > 0 %}
+  "prometheus": {{ parallaxd_prometheus_sources | to_nice_json(indent=2) | indent(2) }},
+{% endif %}
 {% if parallaxd_standby_hosts | length > 0 %}
   "ha": {
     "role": "{{ 'standby' if inventory_hostname in parallaxd_standby_hosts else 'primary' }}",

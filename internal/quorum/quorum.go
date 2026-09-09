@@ -64,6 +64,10 @@ type Verdict struct {
 	Down    int
 	Up      int
 	Unknown int
+	// Independent counts also collapse shared proxy exits, and, when required,
+	// hosting providers. Recovery must use the same independence rule as Down.
+	IndependentUp   int
+	IndependentDown int
 
 	// Counted is the number of probers that produced usable evidence.
 	Counted int
@@ -150,6 +154,8 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 	}
 	v.Down, v.Up = len(down), len(up)
 	v.Counted = v.Down + v.Up
+	v.IndependentDown = IndependentCount(down, c.Quorum.DistinctProviders)
+	v.IndependentUp = IndependentCount(up, c.Quorum.DistinctProviders)
 
 	// Down first: a target reachable from two vantages and unreachable from
 	// three is having an outage, and reporting "up" because somebody could
@@ -183,11 +189,14 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 		v.Dissent = names(down)
 		v.Reason = fmt.Sprintf("inconclusive: %d of %d reported down, quorum needs %d",
 			v.Down, v.Counted, c.Quorum.Agree)
+		if c.ProxyProfile != "" {
+			v.Reason += fmt.Sprintf("; %d independent down votes", v.IndependentDown)
+		}
 		return v
 	}
 
 	v.Status = check.StatusUp
-	_, providers, _ := satisfies(check.Quorum{Agree: 1, Of: 1}, up)
+	_, providers, _ := satisfies(c.Quorum, up)
 	v.Providers = providers
 	v.Reason = fmt.Sprintf("%d of %d reported up", v.Up, v.Counted)
 	return v
@@ -205,6 +214,9 @@ func usable(c check.Check, r check.Result, opts Options) bool {
 	if r.Vantage != c.Vantage {
 		return false
 	}
+	if r.ProxyProfile != c.ProxyProfile || (c.ProxyProfile != "" && r.Egress == "") {
+		return false
+	}
 	if opts.MaxAge > 0 && !opts.Now.IsZero() {
 		if r.At.Before(opts.Now.Add(-opts.MaxAge)) {
 			return false
@@ -217,17 +229,70 @@ func usable(c check.Check, r check.Result, opts Options) bool {
 // returns the distinct providers behind them.
 func satisfies(q check.Quorum, agreeing []check.Result) (int, []string, bool) {
 	providers := distinctProviders(agreeing)
-	if len(agreeing) < q.Agree {
-		return len(agreeing), providers, false
+	independent := IndependentCount(agreeing, q.DistinctProviders)
+	return len(agreeing), providers, independent >= q.Agree
+}
+
+// IndependentResults returns a maximum set with distinct exits and, when
+// requested, distinct hosting providers. Counting the two dimensions separately
+// is insufficient: three providers and three exits may permit only two
+// independent votes. This is bipartite matching, bounded by the fleet size.
+func IndependentResults(results []check.Result, distinctProviders bool) []check.Result {
+	edges := map[string][]check.Result{}
+	for _, r := range results {
+		if r.ProxyProfile != "" && r.Egress == "" {
+			continue
+		}
+		left := r.Prober
+		if distinctProviders {
+			left = strings.TrimSpace(r.Provider)
+			if left == "" {
+				left = "unknown"
+			}
+		}
+		edges[left] = append(edges[left], r)
 	}
-	if q.DistinctProviders && len(providers) < q.Agree {
-		// Three probers behind one provider are one opinion held three times.
-		// Note this fails closed: probers with no provider recorded collapse
-		// into a single group, so an unlabelled fleet cannot satisfy a rule
-		// that asks for diversity.
-		return len(agreeing), providers, false
+	lefts := make([]string, 0, len(edges))
+	for left := range edges {
+		lefts = append(lefts, left)
+		sort.Slice(edges[left], func(i, j int) bool { return edges[left][i].Prober < edges[left][j].Prober })
 	}
-	return len(agreeing), providers, true
+	sort.Strings(lefts)
+	matched := map[string]string{}
+	selected := map[string]check.Result{}
+	var visit func(string, map[string]bool) bool
+	visit = func(left string, seen map[string]bool) bool {
+		for _, r := range edges[left] {
+			right := "direct:" + r.Prober
+			if r.ProxyProfile != "" {
+				right = "proxy:" + r.Egress
+			}
+			if seen[right] {
+				continue
+			}
+			seen[right] = true
+			other, exists := matched[right]
+			if !exists || visit(other, seen) {
+				matched[right] = left
+				selected[right] = r
+				return true
+			}
+		}
+		return false
+	}
+	for _, left := range lefts {
+		visit(left, map[string]bool{})
+	}
+	out := make([]check.Result, 0, len(selected))
+	for _, r := range selected {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Prober < out[j].Prober })
+	return out
+}
+
+func IndependentCount(results []check.Result, distinctProviders bool) int {
+	return len(IndependentResults(results, distinctProviders))
 }
 
 func distinctProviders(results []check.Result) []string {
@@ -276,6 +341,9 @@ func downReason(c check.Check, agreed int, v Verdict, providers []string) string
 	}
 	if v.Unknown > 0 {
 		fmt.Fprintf(&b, "; %d could not tell", v.Unknown)
+	}
+	if c.ProxyProfile != "" {
+		fmt.Fprintf(&b, "; %d independent down votes via proxy %s", v.IndependentDown, c.ProxyProfile)
 	}
 	if c.Quorum.DistinctProviders {
 		b.WriteString("; provider diversity required")

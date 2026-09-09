@@ -111,7 +111,7 @@ func (c *Coordinator) baseAssignedTo(chk check.Check) (string, bool) {
 }
 
 func (c *Coordinator) eligiblePeers(chk check.Check) []Peer {
-	if len(chk.Probers) == 0 {
+	if len(chk.Probers) == 0 && chk.ProxyProfile == "" {
 		return c.peers
 	}
 	allowed := make(map[string]bool, len(chk.Probers))
@@ -120,7 +120,7 @@ func (c *Coordinator) eligiblePeers(chk check.Check) []Peer {
 	}
 	out := make([]Peer, 0, len(chk.Probers))
 	for _, peer := range c.peers {
-		if allowed[peer.Name] {
+		if (len(chk.Probers) == 0 || allowed[peer.Name]) && (chk.ProxyProfile == "" || peer.ProxyProfiles[chk.ProxyProfile] != "") {
 			out = append(out, peer)
 		}
 	}

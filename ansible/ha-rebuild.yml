@@ -1,0 +1,192 @@
+---
+# Recovery only: this does not fence or promote a coordinator. Rebuild the
+# positively fenced former primary after another host has become authoritative.
+- name: Prepare or rebuild a fenced coordinator as standby
+  hosts: "{{ parallaxd_rebuild_host | default('parallaxd_rebuild_candidate') }}"
+  become: true
+  gather_facts: true
+  vars:
+    rebuild_execute: "{{ parallaxd_rebuild_execute | default(false) | bool }}"
+    rebuild_config: /etc/parallaxd/coordinator.json
+    rebuild_candidate: /etc/parallaxd/coordinator.json.standby-candidate
+  tasks:
+    - name: Require an explicit new primary address
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - parallaxd_rebuild_primary_url is defined
+          - parallaxd_rebuild_primary_url is match('^https?://[^/?#]+$')
+          - "'@' not in parallaxd_rebuild_primary_url"
+
+    - name: Read current configuration
+      ansible.builtin.slurp:
+        src: "{{ rebuild_config }}"
+      register: rebuild_source
+      no_log: true
+
+    - name: Preserve current configuration ownership and permissions
+      ansible.builtin.stat:
+        path: "{{ rebuild_config }}"
+      register: rebuild_config_stat
+
+    - name: Form a standby candidate retaining local identity and credentials
+      ansible.builtin.set_fact:
+        rebuild_original: "{{ rebuild_source.content | b64decode | from_json }}"
+        rebuild_document: >-
+          {{ (rebuild_source.content | b64decode | from_json) | combine(
+          {'ha': {'role': 'standby', 'primary_url': parallaxd_rebuild_primary_url}}, recursive=True) }}
+      no_log: true
+
+    - name: Validate existing recovery paths and credentials
+      ansible.builtin.assert:
+        that:
+          - rebuild_document.state_file == '/var/lib/parallaxd/state.json'
+          - rebuild_document.history_file == '/var/lib/parallaxd/observations.jsonl'
+          - rebuild_document.ha.replication_token_file | default('') | length > 0
+          - rebuild_document.operator_token_file | default('') | length > 0
+      no_log: true
+
+    - name: Write and validate the candidate without touching running configuration
+      ansible.builtin.copy:
+        content: "{{ rebuild_document | to_nice_json }}\n"
+        dest: "{{ rebuild_candidate }}"
+        owner: root
+        group: root
+        mode: '0600'
+        validate: /usr/local/bin/parallaxd -config %s -validate
+      no_log: true
+
+    - name: Explain the preparation result
+      ansible.builtin.debug:
+        msg: >-
+          Standby candidate prepared. Execution additionally requires positive
+          independent fencing confirmation, an inactive disabled/masked coordinator,
+          and a verified active new primary. Update inventory roles after recovery.
+
+    - name: Apply the verified recovery candidate
+      when: rebuild_execute and not ansible_check_mode
+      block:
+        - name: Require independent fence attestation
+          ansible.builtin.assert:
+            that:
+              - parallaxd_rebuild_primary_fenced | default(false) | bool
+              - parallaxd_rebuild_actor | default('') | trim | length > 0
+
+        - name: Inspect the existing coordinator fence
+          ansible.builtin.command: systemctl show parallaxd.service -p ActiveState -p UnitFileState
+          register: rebuild_fence
+          changed_when: false
+
+        - name: Refuse an active or restartable former primary
+          ansible.builtin.assert:
+            that:
+              - "'ActiveState=inactive' in rebuild_fence.stdout_lines"
+              - "'UnitFileState=masked' in rebuild_fence.stdout_lines or 'UnitFileState=disabled' in rebuild_fence.stdout_lines"
+
+        - name: Read existing API credential
+          ansible.builtin.slurp:
+            src: "{{ rebuild_document.operator_token_file }}"
+          register: rebuild_token
+          no_log: true
+
+        - name: Verify that the new primary is authoritative
+          ansible.builtin.uri:
+            url: "{{ parallaxd_rebuild_primary_url }}/v1/ha"
+            headers:
+              Authorization: "Bearer {{ rebuild_token.content | b64decode | trim }}"
+            return_content: true
+            follow_redirects: none
+            use_proxy: false
+          register: rebuild_primary
+          no_log: true
+
+        - name: Require an active primary before discarding the old recovery point
+          ansible.builtin.assert:
+            that:
+              - rebuild_primary.json.active | bool
+              - rebuild_primary.json.role == 'primary' or rebuild_primary.json.promoted | bool
+
+        - name: Mark the start of recovery mutations
+          ansible.builtin.set_fact:
+            rebuild_mutation_started: true
+
+        - name: Create a private archive of the previous recovery point
+          ansible.builtin.file:
+            path: "/var/lib/parallaxd-recovery/{{ ansible_facts.date_time.iso8601_basic_short }}"
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+
+        - name: Record the recovery operator and intended upstream
+          ansible.builtin.copy:
+            dest: "/var/lib/parallaxd-recovery/{{ ansible_facts.date_time.iso8601_basic_short }}/recovery.json"
+            mode: '0600'
+            content: "{{ {'actor': parallaxd_rebuild_actor, 'primary_url': parallaxd_rebuild_primary_url, 'at': ansible_facts.date_time.iso8601} | to_nice_json }}\n"
+
+        - name: Archive configuration and mutable state before replacement
+          ansible.builtin.copy:
+            src: "{{ item }}"
+            dest: "/var/lib/parallaxd-recovery/{{ ansible_facts.date_time.iso8601_basic_short }}/{{ item | basename }}"
+            remote_src: true
+            mode: '0600'
+          loop:
+            - "{{ rebuild_config }}"
+            - "{{ rebuild_document.state_file }}"
+            - "{{ rebuild_document.history_file }}"
+          no_log: true
+
+        - name: Install validated standby configuration preserving original ownership
+          ansible.builtin.copy:
+            src: "{{ rebuild_candidate }}"
+            dest: "{{ rebuild_config }}"
+            remote_src: true
+            owner: "{{ rebuild_config_stat.stat.pw_name }}"
+            group: "{{ rebuild_config_stat.stat.gr_name }}"
+            mode: "{{ rebuild_config_stat.stat.mode }}"
+            validate: /usr/local/bin/parallaxd -config %s -validate
+          no_log: true
+
+        - name: Remove archived mutable state including any durable promotion marker
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ rebuild_document.state_file }}"
+            - "{{ rebuild_document.history_file }}"
+
+        - name: Release service fence only after role and state replacement
+          ansible.builtin.systemd_service:
+            name: parallaxd.service
+            masked: false
+            enabled: true
+            daemon_reload: true
+            state: started
+
+        - name: Verify standby replication with the local assurance checker
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - /usr/local/libexec/parallaxd/check-operations.py
+              - --kind
+              - coordinator
+              - --config
+              - "{{ rebuild_config }}"
+              - --report
+              - /var/lib/parallaxd-operations/coordinator.json
+          register: rebuild_verified
+          retries: 12
+          delay: 5
+          until: rebuild_verified.rc == 0
+          changed_when: false
+
+      rescue:
+        - name: Stop an unsuccessful rebuild and retain the independent network or provider fence
+          when: rebuild_mutation_started | default(false)
+          ansible.builtin.systemd_service:
+            name: parallaxd.service
+            state: stopped
+            enabled: false
+        - name: Stop for recovery without restoring an old primary configuration
+          ansible.builtin.fail:
+            msg: Rebuild failed. If recovery mutations started, the service was stopped and disabled. Retain the independent fence and inspect the failed step.

@@ -42,6 +42,7 @@ type MonitorSpec struct {
 	GRPCService      string            `json:"grpc_service,omitempty"`
 	GRPCTLS          bool              `json:"grpc_tls,omitempty"`
 	CAFile           string            `json:"ca_file,omitempty"`
+	ProxyProfile     string            `json:"proxy_profile,omitempty"`
 	TLSExpiryWarning string            `json:"tls_expiry_warning,omitempty"`
 }
 
@@ -68,7 +69,7 @@ func monitorFromCheck(chk check.Check) MonitorSpec {
 		HTTPHeaders: cloneStrings(chk.HTTPHeaders), HTTPBody: chk.HTTPBody,
 		ServerName: chk.ServerName, StartTLS: chk.StartTLS, DNSRecord: chk.DNSRecord,
 		DNSServer: chk.DNSServer, DNSRCode: chk.DNSRCode, GRPCService: chk.GRPCService, GRPCTLS: chk.GRPCTLS,
-		CAFile:           chk.CAFile,
+		CAFile: chk.CAFile, ProxyProfile: chk.ProxyProfile,
 		TLSExpiryWarning: durationString(chk.TLSExpiryWarning)}
 }
 
@@ -101,7 +102,7 @@ func (m MonitorSpec) toCheck() (check.Check, error) {
 		Send: m.Send, HTTPMethod: m.HTTPMethod, HTTPHeaders: cloneStrings(m.HTTPHeaders),
 		HTTPBody: m.HTTPBody, ServerName: m.ServerName, StartTLS: m.StartTLS, DNSRecord: m.DNSRecord,
 		DNSServer: m.DNSServer, DNSRCode: m.DNSRCode, GRPCService: m.GRPCService, GRPCTLS: m.GRPCTLS,
-		CAFile:           m.CAFile,
+		CAFile: m.CAFile, ProxyProfile: m.ProxyProfile,
 		TLSExpiryWarning: tlsExpiryWarning}, nil
 }
 
@@ -195,6 +196,9 @@ func (c *Coordinator) validateMonitorCatalog(monitors []MonitorSpec) (map[string
 		}
 		if chk.Quorum.Of > len(eligiblePeers) {
 			return nil, fmt.Errorf("check %q asks %d probers but only %d are eligible", chk.Name, chk.Quorum.Of, len(eligiblePeers))
+		}
+		if err := validateRouteQuorum(chk, eligiblePeers); err != nil {
+			return nil, err
 		}
 		if chk.Quorum.DistinctProviders {
 			providers := map[string]bool{}
@@ -290,12 +294,13 @@ func (c *Coordinator) handleMonitors(w http.ResponseWriter, r *http.Request) {
 
 func (c *Coordinator) handleMonitorOptions(w http.ResponseWriter, _ *http.Request) {
 	type option struct {
-		Name     string `json:"name"`
-		Provider string `json:"provider"`
+		Name          string            `json:"name"`
+		Provider      string            `json:"provider"`
+		ProxyProfiles map[string]string `json:"proxy_profiles,omitempty"`
 	}
 	out := make([]option, 0, len(c.peers))
 	for _, peer := range c.peers {
-		out = append(out, option{Name: peer.Name, Provider: peer.Provider})
+		out = append(out, option{Name: peer.Name, Provider: peer.Provider, ProxyProfiles: peer.ProxyProfiles})
 	}
 	writeJSON(w, out)
 }

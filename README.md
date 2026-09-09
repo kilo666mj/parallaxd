@@ -210,6 +210,11 @@ parallaxd -config /etc/parallaxd/coordinator.json.candidate -validate
 The Ansible deployment performs the same preflight before atomically replacing
 the live configuration.
 
+Use `parallaxd -verify-backup /path/to/backup-root` to exercise the real restore
+path on disposable copies without starting the coordinator. See
+[automated operational assurance](docs/operations.md#automated-assurance) for
+backup requirements and the separate checker/timer deployment.
+
 ### Agent access with MCP
 
 The coordinator's `/mcp` Streamable HTTP endpoint exposes typed tools for
@@ -256,6 +261,11 @@ ssh -L 8972:127.0.0.1:8972 coordinator.example
 
 Then open `http://127.0.0.1:8972/`.
 
+The optional [host metrics integration](docs/host-metrics.md) adds a read-only
+Hosts view backed by existing Prometheus servers. It uses fixed, bounded
+node-exporter queries and keeps metric collection, storage, and alert rules in
+Prometheus; host measurements never affect parallaxd quorum verdicts.
+
 Warm-standby promotion is intentionally manual: fence the old primary, inspect
 replication health with `parallaxd-ha`, promote with an explicit fence
 attestation, and move the service entry point. Loss of contact is never proof
@@ -273,6 +283,14 @@ go test -race ./...
 
 Tagged releases publish static Linux binaries for amd64 and arm64 with
 checksums.
+
+### Proxy routes
+
+HTTP/HTTPS monitors support named HTTP(S) CONNECT and SOCKS5 proxy profiles.
+Credentials stay on probers, target allow/deny rules remain enforced, and shared
+proxy exits count as one independent quorum vote. Configure profiles and exit
+identities before setting a monitor's `proxy_profile`; see
+[proxy probing](docs/proxy-probing.md) for configuration and rollout details.
 
 ## License
 

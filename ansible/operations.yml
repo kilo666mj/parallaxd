@@ -1,0 +1,76 @@
+---
+# Install assurance independently of the application deployment. This never
+# restarts a coordinator, changes its role, or sends a test notification.
+- name: Install local coordinator and watcher assurance
+  hosts: parallaxd_coordinator:parallaxd_standby:parallaxd_watch
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create assurance directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop:
+        - /usr/local/libexec/parallaxd
+        - /var/lib/parallaxd-operations
+
+    - name: Install read-only assurance checker
+      ansible.builtin.copy:
+        src: ../scripts/check-operations.py
+        dest: /usr/local/libexec/parallaxd/check-operations.py
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Install checks for this host's roles
+      ansible.builtin.include_tasks: tasks/operations-check.yml
+      loop: >-
+        {{ (['coordinator'] if inventory_hostname in
+        (groups.get('parallaxd_coordinator', []) + groups.get('parallaxd_standby', [])) else [])
+        + (['watcher'] if inventory_hostname in groups.get('parallaxd_watch', []) else []) }}
+      loop_control:
+        loop_var: operations_kind
+
+- name: Install offline backup restore assurance
+  hosts: "{{ parallaxd_backup_verify_hosts | default('parallaxd_backup_verifier') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Validate backup verification inputs
+      ansible.builtin.assert:
+        that:
+          - parallaxd_verify_binary is defined
+          - parallaxd_backup_roots | default([]) | length > 0
+
+    - name: Validate backup instance names and paths
+      ansible.builtin.assert:
+        that:
+          - item.name is match('^[a-zA-Z0-9_-]+$')
+          - item.root is match('^/[a-zA-Z0-9/_.-]+$')
+          - "'..' not in item.root.split('/')"
+      loop: "{{ parallaxd_backup_roots }}"
+
+    - name: Create verifier directory
+      ansible.builtin.file:
+        path: /usr/local/libexec/parallaxd
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Install verifier without replacing the running coordinator
+      ansible.builtin.copy:
+        src: "{{ parallaxd_verify_binary }}"
+        dest: /usr/local/libexec/parallaxd/parallaxd-verify
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Install backup verification units
+      ansible.builtin.include_tasks: tasks/operations-backup.yml
+      loop: "{{ parallaxd_backup_roots }}"
+      loop_control:
+        loop_var: backup_instance

@@ -193,7 +193,7 @@ func (c *Coordinator) syncReplica(ctx context.Context) {
 func (c *Coordinator) applyReplica(document replicaDocument) error {
 	c.haMu.Lock()
 	defer c.haMu.Unlock()
-	if document.State.Version < 1 || document.State.Version > 6 {
+	if document.State.Version < 1 || document.State.Version > 7 {
 		return fmt.Errorf("unsupported replicated state version %d", document.State.Version)
 	}
 	if err := c.applyPersistedState(document.State, true); err != nil {

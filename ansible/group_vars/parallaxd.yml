@@ -194,6 +194,13 @@ parallaxd_history_file: /var/lib/parallaxd/observations.jsonl
 parallaxd_history_retention: 720h
 parallaxd_history_max_per_check: 10000
 
+# Optional read-only Prometheus data sources for the dashboard's host view.
+# Each source needs name, url, and exact match_labels identifying node_exporter
+# targets. Use HTTPS with ca_file/client certificate files, or a bearer_token_file.
+# Plain HTTP is rejected unless allow_insecure is explicitly true for a
+# protected loopback/private transport. Credential files remain site-managed.
+parallaxd_prometheus_sources: []
+
 # Enables the authenticated operator API for acknowledging/resolving incidents
 # and creating/cancelling silences. Define parallaxd_operator_token_secret in a
 # gitignored or vaulted group_vars/all.yml. Empty keeps every mutation endpoint
@@ -279,3 +286,11 @@ parallaxd_assignment_interval: 30s
 # vantage probes fail closed unless an explicit allowlist is configured.
 parallaxd_allow_targets: []
 parallaxd_deny_targets: []
+
+# Local proxy endpoints and stable exit identities, overridden per prober host.
+# The coordinator receives only profile names and exit identities.
+parallaxd_proxy_profiles: {}
+# Vault-backed map of profile name -> {username, password}; installed only on
+# probers at /etc/parallaxd/proxy-credentials/<name>.json. Reference this path
+# in the corresponding profile's credentials_file. Never put auth in URLs.
+parallaxd_proxy_credentials: {}

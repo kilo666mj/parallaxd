@@ -8,6 +8,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -76,6 +78,7 @@ type config struct {
 	HistoryFile               string                          `json:"history_file,omitempty"`
 	HistoryRetention          duration                        `json:"history_retention,omitempty"`
 	HistoryMaxPerCheck        int                             `json:"history_max_per_check,omitempty"`
+	Prometheus                []prometheusConfig              `json:"prometheus,omitempty"`
 	HA                        haConfig                        `json:"ha,omitempty"`
 
 	// Heartbeat is the outward dead-man's switch. Without it nothing outside
@@ -126,6 +129,31 @@ type oidcConfig struct {
 	AllowUnverifiedEmail bool   `json:"allow_unverified_email,omitempty"`
 }
 
+type prometheusConfig struct {
+	Name            string            `json:"name"`
+	URL             string            `json:"url"`
+	MatchLabels     map[string]string `json:"match_labels"`
+	BearerTokenFile string            `json:"bearer_token_file,omitempty"`
+	CAFile          string            `json:"ca_file,omitempty"`
+	CertFile        string            `json:"cert_file,omitempty"`
+	KeyFile         string            `json:"key_file,omitempty"`
+	ServerName      string            `json:"server_name,omitempty"`
+	AllowInsecure   bool              `json:"allow_insecure,omitempty"`
+	Timeout         duration          `json:"timeout,omitempty"`
+}
+
+type bearerTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t bearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	clone.Header = request.Header.Clone()
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(clone)
+}
+
 type escalationConfig struct {
 	Name        string             `json:"name"`
 	Destination string             `json:"destination"`
@@ -152,7 +180,8 @@ type proberConfig struct {
 	// Provider groups probers sharing a network. Quorum uses it to tell three
 	// opinions from one opinion held three times; leaving it blank means a
 	// diversity requirement can never be satisfied, which fails closed.
-	Provider string `json:"provider"`
+	Provider      string            `json:"provider"`
+	ProxyProfiles map[string]string `json:"proxy_profiles,omitempty"`
 
 	// PublicKey authenticates results from this prober, base64.
 	PublicKey string `json:"public_key"`
@@ -180,6 +209,7 @@ type checkConfig struct {
 	GRPCService      string            `json:"grpc_service,omitempty"`
 	GRPCTLS          bool              `json:"grpc_tls,omitempty"`
 	CAFile           string            `json:"ca_file,omitempty"`
+	ProxyProfile     string            `json:"proxy_profile,omitempty"`
 	TLSExpiryWarning duration          `json:"tls_expiry_warning,omitempty"`
 
 	// Prober is the preferred owner. Empty uses rendezvous hashing; dynamic
@@ -199,7 +229,7 @@ func (c checkConfig) toCheck() check.Check {
 		HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders, HTTPBody: c.HTTPBody,
 		ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
 		DNSServer: c.DNSServer, DNSRCode: c.DNSRCode, GRPCService: c.GRPCService, GRPCTLS: c.GRPCTLS,
-		CAFile:           c.CAFile,
+		CAFile: c.CAFile, ProxyProfile: c.ProxyProfile,
 		TLSExpiryWarning: time.Duration(c.TLSExpiryWarning),
 	}
 }
@@ -226,6 +256,7 @@ func main() {
 		debug      = flag.Bool("debug", false, "verbose logging")
 		showVer    = flag.Bool("version", false, "print version and exit")
 		validate   = flag.Bool("validate", false, "validate config and exit")
+		backupRoot = flag.String("verify-backup", "", "verify a backup filesystem root using disposable copies, then exit")
 	)
 	flag.Parse()
 
@@ -252,6 +283,14 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(log)
+	if *backupRoot != "" {
+		if err := verifyBackup(*backupRoot, *configPath, log); err != nil {
+			log.Error("backup verification failed", "err", err)
+			os.Exit(1)
+		}
+		fmt.Println("backup restored successfully in isolation; no listeners or workers started")
+		return
+	}
 	if *validate {
 		if err := validateConfig(*configPath, log); err != nil {
 			log.Error("invalid configuration", "err", err)
@@ -345,7 +384,71 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 	if err != nil {
 		return config{}, nil, err
 	}
+	return prepareConfig(cfg, log, restoreState)
+}
 
+func preparePrometheus(cfgs []prometheusConfig) ([]coordinator.PrometheusSource, error) {
+	sources := make([]coordinator.PrometheusSource, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.Timeout < 0 {
+			return nil, fmt.Errorf("prometheus source %q: timeout cannot be negative", cfg.Name)
+		}
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: cfg.ServerName}
+		if cfg.CAFile != "" {
+			pem, err := os.ReadFile(cfg.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("prometheus source %q: read CA file: %w", cfg.Name, err)
+			}
+			roots, err := x509.SystemCertPool()
+			if err != nil {
+				return nil, fmt.Errorf("prometheus source %q: load system roots: %w", cfg.Name, err)
+			}
+			if roots == nil {
+				roots = x509.NewCertPool()
+			}
+			if !roots.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("prometheus source %q: CA file contains no certificates", cfg.Name)
+			}
+			tlsConfig.RootCAs = roots
+		}
+		if (cfg.CertFile == "") != (cfg.KeyFile == "") {
+			return nil, fmt.Errorf("prometheus source %q: cert_file and key_file must be configured together", cfg.Name)
+		}
+		if cfg.CertFile != "" {
+			certificate, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("prometheus source %q: load client certificate: %w", cfg.Name, err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{certificate}
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = tlsConfig
+		var roundTripper http.RoundTripper = transport
+		if cfg.BearerTokenFile != "" {
+			raw, err := os.ReadFile(cfg.BearerTokenFile)
+			if err != nil {
+				return nil, fmt.Errorf("prometheus source %q: read bearer token file: %w", cfg.Name, err)
+			}
+			token := strings.TrimSpace(string(raw))
+			if token == "" {
+				return nil, fmt.Errorf("prometheus source %q: bearer token file is empty", cfg.Name)
+			}
+			roundTripper = bearerTransport{base: roundTripper, token: token}
+		}
+		timeout := time.Duration(cfg.Timeout)
+		if timeout <= 0 {
+			timeout = 8 * time.Second
+		}
+		sources = append(sources, coordinator.PrometheusSource{
+			Name: cfg.Name, URL: cfg.URL, MatchLabels: cfg.MatchLabels,
+			AllowInsecure: cfg.AllowInsecure,
+			Client:        &http.Client{Transport: roundTripper, Timeout: timeout},
+		})
+	}
+	return sources, nil
+}
+
+func prepareConfig(cfg config, log *slog.Logger, restoreState bool) (config, *coordinator.Coordinator, error) {
 	rawKey, err := os.ReadFile(cfg.KeyFile)
 	if err != nil {
 		return config{}, nil, fmt.Errorf("read key file: %w", err)
@@ -398,6 +501,10 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 			return config{}, nil, errors.New("OIDC client secret file is empty")
 		}
 	}
+	prometheus, err := preparePrometheus(cfg.Prometheus)
+	if err != nil {
+		return config{}, nil, err
+	}
 
 	peers := make([]coordinator.Peer, 0, len(cfg.Probers))
 	for _, p := range cfg.Probers {
@@ -406,7 +513,7 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 			return config{}, nil, fmt.Errorf("prober %q: %w", p.Name, err)
 		}
 		peers = append(peers, coordinator.Peer{
-			Name: p.Name, URL: p.URL, Provider: p.Provider, PublicKey: pub,
+			Name: p.Name, URL: p.URL, Provider: p.Provider, PublicKey: pub, ProxyProfiles: p.ProxyProfiles,
 		})
 	}
 
@@ -497,6 +604,7 @@ func prepare(configPath string, log *slog.Logger, restoreState bool) (config, *c
 		HistoryFile:               cfg.HistoryFile,
 		HistoryRetention:          time.Duration(cfg.HistoryRetention),
 		HistoryMaxPerCheck:        cfg.HistoryMaxPerCheck,
+		Prometheus:                prometheus,
 		HA: coordinator.HAConfig{Role: cfg.HA.Role, PrimaryURL: cfg.HA.PrimaryURL,
 			Token: replicationToken, Interval: time.Duration(cfg.HA.Interval), Timeout: time.Duration(cfg.HA.Timeout)},
 		SkipRestore: !restoreState,

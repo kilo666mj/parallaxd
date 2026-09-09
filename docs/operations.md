@@ -1,5 +1,77 @@
 # Recurring operations
 
+## Automated assurance
+
+`ansible/operations.yml` installs checks independently of application deployment:
+
+- Every fifteen minutes, each coordinator checks its role, replication freshness
+  and lag, result/delivery queues, delivery/history errors, and rejection-counter
+  increases. The primary also checks fresh mesh reports for every configured
+  prober, monitor ownership, stale observations, and MCP initialization/status.
+- The watcher independently checks that it has received a fresh authenticated
+  heartbeat. Its startup grace period alone does not count as healthy.
+- On a site-selected backup host, daily jobs restore each coordinator's backup
+  using disposable copies and the real coordinator restore code. Their systemd
+  units disable networking and make the backup filesystem read-only.
+
+Install the local checks from `ansible` with `ansible-playbook operations.yml`.
+To include backup verification, first build a binary for the backup host:
+
+```sh
+CGO_ENABLED=0 go build -o /tmp/parallaxd-verify ./cmd/parallaxd
+```
+
+Keep the backup host and paths in a private variables file, for example:
+
+```yaml
+parallaxd_backup_verify_hosts: backup-admin
+parallaxd_verify_binary: /tmp/parallaxd-verify
+parallaxd_backup_roots:
+  - name: primary
+    root: /backups/remote/primary.example
+  - name: standby
+    root: /backups/remote/standby.example
+parallaxd_backup_verify_calendar: '*-*-* 06:30:00'
+```
+
+Then run `ansible-playbook operations.yml -e @/secure/operations.yml` from
+`ansible`. Set the calendar after the site's backup window. The verifier is
+installed separately from the running coordinator; update it when the state
+format changes. This playbook does not create backups or define retention.
+
+The default local checker reads the existing operator credential from the
+coordinator configuration, uses it only for reads, and never prints it. A
+dedicated viewer token can be supplied with the checker's `--token-file` option.
+MCP checks run only on the primary because the standby blocks POST requests.
+
+Inspect the results with:
+
+```sh
+systemctl list-timers 'parallaxd-*'
+cat /var/lib/parallaxd-operations/coordinator.json
+journalctl -u parallaxd-verify-backup-primary.service
+```
+
+Failures return nonzero and appear as failed systemd units. Connect those units
+and report freshness to the site's independent monitoring; these checks do not
+send messages themselves. Rejection counters use the prior report as a baseline;
+the first run establishes that baseline, and lower counts allow for restarts.
+
+To verify a filesystem backup manually:
+
+```sh
+parallaxd -verify-backup /backups/remote/primary.example
+```
+
+The root must contain `/etc/parallaxd/coordinator.json`, every referenced key
+and credential file, and the configured state and observation journal at their
+original absolute paths. Missing files, escaping symlinks, malformed journal
+records, unsupported state versions, and restore errors fail verification.
+No listeners or workers start. Normal restore may compact expired observations
+or bootstrap an administrator, so it operates only on private temporary copies.
+Backup age, historic retention, off-host transfer, and end-to-end alert delivery
+remain separate checks; a successful restore does not establish those properties.
+
 ## Targeted deployments
 
 Run these commands from the repository's `ansible` directory. Use tags for
@@ -83,7 +155,7 @@ fleet and should not hold its credentials.
 ## Command-restricting SSH gateway
 
 Normal Ansible execution requires a remote shell capable of running its Python
-module wrapper and a transfer mechanism for module payloads and binaries. The
+module wrapper and a transfer mechanism for module payloads and binaries.
 If a command-restricting gateway permits selected interactive commands but
 rejects these requirements, treat the failed Ansible preflight as a deployment
 blocker.

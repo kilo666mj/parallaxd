@@ -15,3 +15,6 @@ ansible/host_vars/
 # committed; this is not.
 ansible/group_vars/all.yml
 ansible/local/
+
+# Python assurance test bytecode.
+__pycache__/

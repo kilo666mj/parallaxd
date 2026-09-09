@@ -1,0 +1,40 @@
+---
+- name: Install assurance service
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/parallaxd-operations-{{ operations_kind }}.service"
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Parallaxd {{ operations_kind }} assurance
+      After=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/python3 /usr/local/libexec/parallaxd/check-operations.py --kind {{ operations_kind }} --config /etc/parallaxd/{{ 'watch' if operations_kind == 'watcher' else 'coordinator' }}.json --report /var/lib/parallaxd-operations/{{ operations_kind }}.json {{ '--mcp' if operations_kind == 'coordinator' else '' }}
+      TimeoutStartSec=90
+      UMask=0077
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ReadWritePaths=/var/lib/parallaxd-operations
+
+- name: Install assurance timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/parallaxd-operations-{{ operations_kind }}.timer"
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Check Parallaxd {{ operations_kind }} every fifteen minutes
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=15min
+      RandomizedDelaySec=60
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable assurance timer
+  when: not ansible_check_mode
+  ansible.builtin.systemd_service:
+    name: "parallaxd-operations-{{ operations_kind }}.timer"
+    daemon_reload: true
+    enabled: true
+    state: started

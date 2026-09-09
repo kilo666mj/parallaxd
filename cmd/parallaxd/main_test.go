@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/kilo666mj/parallaxd/internal/wire"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 func validConfigFile(t *testing.T) string {
 	t.Helper()
@@ -63,6 +68,42 @@ func TestValidateConfigUsesStartupValidationWithoutState(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := validateConfig(path, log); err != nil {
 		t.Fatalf("validateConfig: %v", err)
+	}
+}
+
+func TestPreparePrometheusLoadsBearerTokenFromFile(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "prometheus-token")
+	if err := os.WriteFile(tokenFile, []byte("private-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := preparePrometheus([]prometheusConfig{{
+		Name: "site", URL: "https://prometheus.example", MatchLabels: map[string]string{"job": "node"},
+		BearerTokenFile: tokenFile,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := sources[0].Client.Transport.(bearerTransport)
+	if !ok || transport.token != "private-token" {
+		t.Fatalf("transport=%T token loaded=%v", sources[0].Client.Transport, ok)
+	}
+	var authorization string
+	transport.base = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		authorization = request.Header.Get("Authorization")
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: http.Header{}}, nil
+	})
+	sources[0].Client.Transport = transport
+	request, err := http.NewRequest(http.MethodGet, "https://prometheus.example/api/v1/query", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := sources[0].Client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if authorization != "Bearer private-token" {
+		t.Fatalf("Authorization=%q", authorization)
 	}
 }
 

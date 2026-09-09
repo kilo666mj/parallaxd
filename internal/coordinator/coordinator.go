@@ -79,6 +79,9 @@ type Peer struct {
 	// uses it to go looking for genuinely independent vantages.
 	Provider string
 
+	// ProxyProfiles maps supported profile names to coordinator-owned exit identities.
+	ProxyProfiles map[string]string
+
 	PublicKey ed25519.PublicKey
 }
 
@@ -132,6 +135,7 @@ type Config struct {
 	HistoryFile        string
 	HistoryRetention   time.Duration
 	HistoryMaxPerCheck int
+	Prometheus         []PrometheusSource
 	HA                 HAConfig
 	SkipRestore        bool
 
@@ -187,6 +191,11 @@ type Coordinator struct {
 	log    *slog.Logger
 	client *http.Client
 	now    func() time.Time
+
+	// prometheus is an optional read-only metrics plane. It is deliberately
+	// separate from checks, verdicts, incidents, persistence, and replication:
+	// losing metrics context must never change an availability decision.
+	prometheus []prometheusRuntime
 
 	// componentsFor maps a check name to the components containing it, so a
 	// result only re-evaluates the groupings it can actually affect.
@@ -335,18 +344,61 @@ func (s *entityState) reported() check.Status {
 }
 
 func validateEligibleProbers(chk check.Check, peers []Peer, byName map[string]Peer) ([]Peer, error) {
-	if len(chk.Probers) == 0 {
-		return peers, nil
+	candidates := peers
+	if len(chk.Probers) > 0 {
+		candidates = nil
+		for _, name := range chk.Probers {
+			peer, ok := byName[name]
+			if !ok {
+				return nil, fmt.Errorf("check %q names unregistered eligible prober %q", chk.Name, name)
+			}
+			candidates = append(candidates, peer)
+		}
 	}
-	eligible := make([]Peer, 0, len(chk.Probers))
-	for _, name := range chk.Probers {
-		peer, ok := byName[name]
-		if !ok {
-			return nil, fmt.Errorf("check %q names unregistered eligible prober %q", chk.Name, name)
+	eligible := make([]Peer, 0, len(candidates))
+	for _, peer := range candidates {
+		if chk.ProxyProfile != "" && peer.ProxyProfiles[chk.ProxyProfile] == "" {
+			if len(chk.Probers) > 0 || chk.Prober == peer.Name {
+				return nil, fmt.Errorf("check %q: prober %q has no registered proxy profile %q", chk.Name, peer.Name, chk.ProxyProfile)
+			}
+			continue
 		}
 		eligible = append(eligible, peer)
 	}
 	return eligible, nil
+}
+
+func routeResult(chk check.Check, peer Peer) check.Result {
+	return check.Result{Prober: peer.Name, Provider: peer.Provider, ProxyProfile: chk.ProxyProfile, Egress: peer.ProxyProfiles[chk.ProxyProfile]}
+}
+
+func validateRouteQuorum(chk check.Check, peers []Peer) error {
+	if chk.ProxyProfile == "" {
+		return nil
+	}
+	results := make([]check.Result, 0, len(peers))
+	for _, peer := range peers {
+		results = append(results, routeResult(chk, peer))
+	}
+	if quorum.IndependentCount(results, chk.Quorum.DistinctProviders) < chk.Quorum.Agree {
+		return fmt.Errorf("check %q: insufficient independent proxy exits/providers for quorum", chk.Name)
+	}
+	return nil
+}
+
+// A signed result from an older agent may have silently ignored proxy_profile.
+// Fail closed before it can trigger or clear an incident. Topology comes from
+// registration, not a prober's claim of an independent exit.
+func normalizeRoute(chk check.Check, peer Peer, r check.Result) check.Result {
+	expected := routeResult(chk, peer)
+	if r.ProxyProfile != expected.ProxyProfile || r.Egress != expected.Egress || (chk.ProxyProfile != "" && expected.Egress == "") {
+		r.Status = check.StatusUnknown
+		r.Detail = "result route does not match the registered proxy profile/exit"
+	}
+	r.Provider = peer.Provider
+	r.ProxyProfile = expected.ProxyProfile
+	r.Egress = expected.Egress
+	return r
 }
 
 // New builds a coordinator.
@@ -403,12 +455,22 @@ func New(cfg Config) (*Coordinator, error) {
 	if err := validateOIDCConfig(cfg.OIDC); err != nil {
 		return nil, err
 	}
+	prometheus, err := preparePrometheusSources(cfg.Prometheus)
+	if err != nil {
+		return nil, err
+	}
 
 	ring := wire.NewKeyring()
 	byName := make(map[string]Peer, len(cfg.Peers))
 	byKey := make(map[string]string, len(cfg.Peers))
 	peers := make([]Peer, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
+		p.ProxyProfiles = cloneStrings(p.ProxyProfiles)
+		for name, egress := range p.ProxyProfiles {
+			if !check.ValidRouteID(name) || !check.ValidRouteID(egress) {
+				return nil, fmt.Errorf("prober %q has an invalid proxy profile/exit identifier", p.Name)
+			}
+		}
 		if _, dup := byName[p.Name]; dup {
 			// Quorum counts one vote per prober name. Two peers sharing one
 			// would either vote as one or let one vote twice, depending on
@@ -450,6 +512,9 @@ func New(cfg Config) (*Coordinator, error) {
 			// alert.
 			return nil, fmt.Errorf("check %q asks %d probers but only %d are registered",
 				c.Name, c.Quorum.Of, len(eligiblePeers))
+		}
+		if err := validateRouteQuorum(c, eligiblePeers); err != nil {
+			return nil, err
 		}
 		if c.Quorum.DistinctProviders {
 			providers := make(map[string]bool)
@@ -501,6 +566,7 @@ func New(cfg Config) (*Coordinator, error) {
 		log:             cfg.Logger,
 		client:          cfg.HTTPClient,
 		now:             cfg.Now,
+		prometheus:      prometheus,
 		slots:           make(chan struct{}, cfg.MaxFanOuts),
 		resultSlots:     make(chan struct{}, cfg.MaxPendingResults),
 		startedAt:       cfg.Now(),
@@ -562,7 +628,7 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 	}
 	// Provider diversity is coordinator policy, not a claim a prober gets to
 	// make about itself. Always replace the signed value with the registered one.
-	r.Provider = peer.Provider
+	r = normalizeRoute(chk, peer, r)
 	// An isolated prober's result is not evidence, so it is not a trigger
 	// either. Fanning out on it would spend the corroboration budget on
 	// reports carrying no information — and during a partition, when every
@@ -649,6 +715,9 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 		v.Status = check.StatusUnknown
 		v.Reason = fmt.Sprintf("recovery unconfirmed: %d of %d reported up, quorum needs %d",
 			v.Up, v.Counted, chk.Quorum.Agree)
+		if chk.ProxyProfile != "" {
+			v.Reason += fmt.Sprintf("; %d independent up votes", v.IndependentUp)
+		}
 	}
 	now := c.now()
 	st.lastVerdict = now
@@ -698,10 +767,7 @@ func (s *entityState) clearSuspicion() {
 }
 
 func recoveryConfirmed(chk check.Check, v quorum.Verdict) bool {
-	if v.Up < chk.Quorum.Agree {
-		return false
-	}
-	return !chk.Quorum.DistinctProviders || len(v.Providers) >= chk.Quorum.Agree
+	return v.IndependentUp >= chk.Quorum.Agree
 }
 
 func (c *Coordinator) evaluate(chk check.Check, results []check.Result) quorum.Verdict {
@@ -835,6 +901,32 @@ func (c *Coordinator) corroborators(chk check.Check, reported check.Result) []Pe
 	if want > len(candidates) {
 		want = len(candidates)
 	}
+	if chk.ProxyProfile != "" {
+		// First select a maximum independent set compatible with the reporter.
+		// Fill any spare budget with other routes so partial failures can still
+		// be observed. Quorum independently checks the resulting evidence.
+		seed := routeResult(chk, c.byName[reported.Prober])
+		var routes []check.Result
+		for _, p := range candidates {
+			r := routeResult(chk, p)
+			if r.Egress == seed.Egress || (chk.Quorum.DistinctProviders && r.Provider == seed.Provider) {
+				continue
+			}
+			routes = append(routes, r)
+		}
+		chosen := map[string]bool{}
+		var out []Peer
+		for _, r := range quorum.IndependentResults(routes, chk.Quorum.DistinctProviders) {
+			chosen[r.Prober] = true
+			out = append(out, c.byName[r.Prober])
+		}
+		for _, p := range candidates {
+			if !chosen[p.Name] {
+				out = append(out, p)
+			}
+		}
+		return out[:want]
+	}
 
 	if !chk.Quorum.DistinctProviders {
 		return candidates[:want]
@@ -921,7 +1013,7 @@ func (c *Coordinator) ask(ctx context.Context, p Peer, chk check.Check) (_ check
 	}
 	// The coordinator owns provider topology. A prober may be misconfigured or
 	// compromised, but neither may redefine the independence of its vote.
-	payload.Result.Provider = p.Provider
+	payload.Result = normalizeRoute(chk, p, payload.Result)
 	return payload.Result, nil
 }
 
@@ -952,6 +1044,7 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/deliveries", c.viewOnly(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) }))
 	mux.HandleFunc("GET /v1/history", c.viewOnly(c.handleHistory))
 	mux.HandleFunc("GET /v1/history/summary", c.viewOnly(c.handleHistorySummary))
+	mux.HandleFunc("GET /v1/metrics/hosts", c.viewOnly(c.handleHostMetrics))
 	mux.HandleFunc("GET /v1/auth/me", c.handleAuthMe)
 	mux.HandleFunc("POST /v1/auth/login", c.handleLogin)
 	mux.HandleFunc("POST /v1/auth/logout", c.handleLogout)

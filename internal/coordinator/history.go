@@ -26,20 +26,22 @@ const (
 // Observation is one prober's accepted result, before quorum folds multiple
 // vantages into a verdict.
 type Observation struct {
-	ID         string       `json:"id"`
-	Check      string       `json:"check"`
-	Kind       check.Kind   `json:"kind"`
-	Target     string       `json:"target"`
-	Prober     string       `json:"prober"`
-	Provider   string       `json:"provider,omitempty"`
-	Status     check.Status `json:"status"`
-	Verdict    check.Status `json:"verdict,omitempty"`
-	ObservedAt time.Time    `json:"observed_at"`
-	ReceivedAt time.Time    `json:"received_at"`
-	LatencyMS  int64        `json:"latency_ms,omitempty"`
-	Detail     string       `json:"detail,omitempty"`
-	Source     string       `json:"source"`
-	Suppressed bool         `json:"suppressed,omitempty"`
+	ID           string       `json:"id"`
+	Check        string       `json:"check"`
+	Kind         check.Kind   `json:"kind"`
+	Target       string       `json:"target"`
+	Prober       string       `json:"prober"`
+	Provider     string       `json:"provider,omitempty"`
+	ProxyProfile string       `json:"proxy_profile,omitempty"`
+	Egress       string       `json:"egress,omitempty"`
+	Status       check.Status `json:"status"`
+	Verdict      check.Status `json:"verdict,omitempty"`
+	ObservedAt   time.Time    `json:"observed_at"`
+	ReceivedAt   time.Time    `json:"received_at"`
+	LatencyMS    int64        `json:"latency_ms,omitempty"`
+	Detail       string       `json:"detail,omitempty"`
+	Source       string       `json:"source"`
+	Suppressed   bool         `json:"suppressed,omitempty"`
 
 	DNSAnswers    []string  `json:"dns_answers,omitempty"`
 	TLSCommonName string    `json:"tls_common_name,omitempty"`
@@ -82,7 +84,7 @@ func (c *Coordinator) historyMaxPerCheck() int {
 func (c *Coordinator) recordObservation(chk check.Check, result check.Result, source string, suppressed bool, verdict check.Status) {
 	observation := Observation{
 		Check: chk.Name, Kind: chk.Kind, Target: chk.Target, Prober: result.Prober,
-		Provider: result.Provider, Status: result.Status, ObservedAt: result.At.UTC(),
+		Provider: result.Provider, ProxyProfile: result.ProxyProfile, Egress: result.Egress, Status: result.Status, ObservedAt: result.At.UTC(),
 		ReceivedAt: c.now().UTC(), LatencyMS: result.Latency.Milliseconds(),
 		Detail: result.Detail, Source: source, Suppressed: suppressed, Verdict: verdict,
 	}

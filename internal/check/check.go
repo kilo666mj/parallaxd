@@ -17,6 +17,7 @@ package check
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -115,17 +116,18 @@ type Check struct {
 	// "a LOGOUT\r\n" for IMAP.
 	Send string `json:"send,omitempty"`
 
-	HTTPMethod  string            `json:"http_method,omitempty"`
-	HTTPHeaders map[string]string `json:"http_headers,omitempty"`
-	HTTPBody    string            `json:"http_body,omitempty"`
-	ServerName  string            `json:"server_name,omitempty"`
-	StartTLS    bool              `json:"start_tls,omitempty"`
-	DNSRecord   string            `json:"dns_record,omitempty"`
-	DNSServer   string            `json:"dns_server,omitempty"`
-	DNSRCode    string            `json:"dns_rcode,omitempty"`
-	GRPCService string            `json:"grpc_service,omitempty"`
-	GRPCTLS     bool              `json:"grpc_tls,omitempty"`
-	CAFile      string            `json:"ca_file,omitempty"`
+	HTTPMethod   string            `json:"http_method,omitempty"`
+	HTTPHeaders  map[string]string `json:"http_headers,omitempty"`
+	HTTPBody     string            `json:"http_body,omitempty"`
+	ServerName   string            `json:"server_name,omitempty"`
+	StartTLS     bool              `json:"start_tls,omitempty"`
+	DNSRecord    string            `json:"dns_record,omitempty"`
+	DNSServer    string            `json:"dns_server,omitempty"`
+	DNSRCode     string            `json:"dns_rcode,omitempty"`
+	GRPCService  string            `json:"grpc_service,omitempty"`
+	GRPCTLS      bool              `json:"grpc_tls,omitempty"`
+	CAFile       string            `json:"ca_file,omitempty"`
+	ProxyProfile string            `json:"proxy_profile,omitempty"`
 
 	// TLSExpiryWarning makes an otherwise valid TLS certificate a failed
 	// check when it has this much lifetime or less remaining. Zero disables
@@ -199,6 +201,8 @@ func (c Check) Validate() error {
 		return fmt.Errorf("check %q: grpc_service is only valid for gRPC checks", c.Name)
 	case c.GRPCTLS && c.Kind != KindGRPC:
 		return fmt.Errorf("check %q: grpc_tls is only valid for gRPC checks", c.Name)
+	case c.ProxyProfile != "" && (c.Kind != KindHTTP || !ValidRouteID(c.ProxyProfile)):
+		return fmt.Errorf("check %q: proxy_profile requires HTTP and a 1-64 character route identifier", c.Name)
 	case c.CAFile != "" && c.Kind != KindHTTP && c.Kind != KindTLS && c.Kind != KindSMTP && c.Kind != KindGRPC:
 		return fmt.Errorf("check %q: ca_file is only valid for HTTP, TLS, SMTP or gRPC checks", c.Name)
 	case c.CAFile != "" && !filepath.IsAbs(c.CAFile):
@@ -298,6 +302,10 @@ type Result struct {
 	// Provider groups probers that share a network, so a quorum can tell
 	// three opinions from one opinion held three times.
 	Provider string `json:"provider,omitempty"`
+
+	// ProxyProfile and Egress identify the route used. Empty means direct.
+	ProxyProfile string `json:"proxy_profile,omitempty"`
+	Egress       string `json:"egress,omitempty"`
 }
 
 // IsEvidence reports whether this result should count toward a verdict. An
@@ -305,3 +313,8 @@ type Result struct {
 func (r Result) IsEvidence() bool {
 	return r.Status == StatusUp || r.Status == StatusDown
 }
+
+var routeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// ValidRouteID validates nonsecret proxy profile and exit identifiers.
+func ValidRouteID(s string) bool { return routeID.MatchString(s) }

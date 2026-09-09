@@ -201,3 +201,21 @@ func TestOnlyUpAndDownAreEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyProfileValidation(t *testing.T) {
+	c := valid()
+	c.ProxyProfile = "corp"
+	if c.Validate() == nil {
+		t.Fatal("proxy accepted for TCP")
+	}
+	c.Kind, c.Target = KindHTTP, "https://example.com"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../secret", "has space", "https://proxy", strings.Repeat("a", 65)} {
+		c.ProxyProfile = name
+		if c.Validate() == nil {
+			t.Fatalf("invalid profile %q accepted", name)
+		}
+	}
+}

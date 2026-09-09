@@ -28,6 +28,37 @@
       this host is permitted to probe.
   when: inventory_hostname in groups.get('parallaxd_internal_probers', [])
 
+- name: Validate proxy credential names
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
+      - item.key in parallaxd_proxy_profiles
+      - item.value.username is defined
+      - item.value.password is defined
+      - parallaxd_proxy_profiles[item.key].credentials_file == parallaxd_config_dir + '/proxy-credentials/' + item.key + '.json'
+  loop: "{{ parallaxd_proxy_credentials | dict2items }}"
+  no_log: true
+
+- name: Create the prober proxy credential directory
+  ansible.builtin.file:
+    path: "{{ parallaxd_config_dir }}/proxy-credentials"
+    state: directory
+    owner: root
+    group: "{{ parallaxd_group }}"
+    mode: "0750"
+  when: parallaxd_proxy_credentials | length > 0
+
+- name: Install local proxy credentials
+  ansible.builtin.copy:
+    content: "{{ item.value | to_json }}"
+    dest: "{{ parallaxd_config_dir }}/proxy-credentials/{{ item.key }}.json"
+    owner: root
+    group: "{{ parallaxd_group }}"
+    mode: "0640"
+  loop: "{{ parallaxd_proxy_credentials | dict2items }}"
+  no_log: true
+  # Credentials are reread for each probe; rotation needs no restart.
+
 - name: Deploy the prober configuration
   ansible.builtin.template:
     src: probe.json.j2

@@ -20,3 +20,14 @@ parallaxd_replication_token_secret: ""
 parallaxd_ca_files: {}
 # parallaxd_ca_files:
 #   internal: "{{ lookup('file', '../files/internal-ca.crt') }}"
+
+# Optional read-only host context from an existing Prometheus. This example
+# assumes the coordinator reaches it through a protected private network. Use
+# HTTPS plus ca_file and bearer_token_file/client certificate paths otherwise;
+# provision those credential files with vaulted, site-private automation.
+# parallaxd_prometheus_sources:
+#   - name: primary-site
+#     url: http://127.0.0.1:9090
+#     allow_insecure: true
+#     match_labels:
+#       job: node

@@ -80,6 +80,39 @@ diagnostics for investigation; never start both coordinators as primary.
 Promotion is not reversed. Keep the former primary fenced until it has been
 rebuilt as a standby following the current active coordinator.
 
+The recovery helper `ansible/ha-rebuild.yml` prepares and validates a standby
+candidate by default. Supply a private variable file with
+`parallaxd_rebuild_host` (one inventory host) and
+`parallaxd_rebuild_primary_url` (the current active coordinator over the trusted
+control network), then run:
+
+```sh
+ansible-playbook ha-rebuild.yml -e @/secure/rebuild.yml
+```
+
+It retains the host's signing identity and credentials. Verify that these still
+match the current active coordinator before execution. The helper supports the
+standard `/var/lib/parallaxd/state.json` and `observations.jsonl` paths and
+requires the local assurance checker from `operations.yml`.
+
+To execute during the recovery window, the variable file must additionally set
+`parallaxd_rebuild_execute: true`, `parallaxd_rebuild_primary_fenced: true`, and
+`parallaxd_rebuild_actor`. The old coordinator must already be inactive and
+disabled or masked, with its independently verified provider/network fence
+maintained. The new primary must report active through its authenticated API.
+
+The helper archives the old config/state/history and actor record, installs the
+validated standby config, removes the archived mutable files (including any
+durable promotion marker), starts the standby, and checks fresh replication.
+If a mutation fails, it stops and disables the service; it never restores an old
+primary configuration automatically. Keep the independent fence in place and
+permit only the connectivity needed for replication. Unrelated tunnel services
+are untouched. Update inventory roles before the next ordinary deployment.
+
+The helper's preparation path is safe to run before an exercise. Its execution
+path requires a disposable rehearsal or an announced recovery window; a syntax
+check is not evidence that a site's fencing or rebuild procedure works.
+
 - [ ] Preserve or archive its old state before reconfiguration.
 - [ ] Configure it as standby with the current coordinator identity and
       replication credential through the normal secret-distribution path.

@@ -70,7 +70,8 @@ type Config struct {
 	// Policy constrains where this prober may connect, independently of what
 	// the coordinator asks for. The host's owner decides what is reachable;
 	// the coordinator only decides what is worth checking.
-	Policy probe.Policy
+	Policy        probe.Policy
+	ProxyProfiles map[string]probe.ProxyProfile
 
 	// MaxConcurrent bounds simultaneous probes. Zero applies the default.
 	MaxConcurrent int
@@ -94,6 +95,14 @@ type Prober struct {
 
 // New builds a prober.
 func New(cfg Config) (*Prober, error) {
+	if err := probe.ValidateProxyProfiles(cfg.ProxyProfiles); err != nil {
+		return nil, err
+	}
+	profiles := make(map[string]probe.ProxyProfile, len(cfg.ProxyProfiles))
+	for name, profile := range cfg.ProxyProfiles {
+		profiles[name] = profile
+	}
+	cfg.ProxyProfiles = profiles
 	switch {
 	case cfg.Name == "":
 		return nil, errors.New("prober name is required")
@@ -121,7 +130,7 @@ func New(cfg Config) (*Prober, error) {
 		cfg: cfg,
 		kinds: map[check.Kind]probe.Prober{
 			check.KindTCP:     probe.TCP{Policy: cfg.Policy},
-			check.KindHTTP:    probe.HTTP{Policy: cfg.Policy},
+			check.KindHTTP:    probe.HTTP{Policy: cfg.Policy, ProxyProfiles: cfg.ProxyProfiles},
 			check.KindBanner:  probe.Banner{Policy: cfg.Policy},
 			check.KindDNS:     probe.DNS{Policy: cfg.Policy},
 			check.KindTLS:     probe.TLS{Policy: cfg.Policy},
@@ -167,6 +176,10 @@ func (p *Prober) Run(ctx context.Context, c check.Check, requestID string) (wire
 	}
 
 	r := probe.Run(ctx, impl, c, p.cfg.Name, p.cfg.Provider)
+	r.ProxyProfile = c.ProxyProfile
+	if c.ProxyProfile != "" {
+		r.Egress = p.cfg.ProxyProfiles[c.ProxyProfile].Egress
+	}
 	return p.sign(r, requestID)
 }
 

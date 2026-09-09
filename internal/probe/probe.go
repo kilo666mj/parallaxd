@@ -114,6 +114,10 @@ func classify(err error) (check.Status, string) {
 	if err == nil {
 		return check.StatusUp, ""
 	}
+	var proxyErr *proxyFailure
+	if errors.As(err, &proxyErr) {
+		return check.StatusUnknown, proxyErr.Error()
+	}
 
 	// Cancelled or deadline from the caller's own context, not the target
 	// being slow: we stopped asking before learning anything.
@@ -212,7 +216,8 @@ type HTTP struct {
 	Client *http.Client
 
 	// Policy constrains where this prober may connect.
-	Policy Policy
+	Policy        Policy
+	ProxyProfiles map[string]ProxyProfile
 }
 
 func (HTTP) Kind() check.Kind { return check.KindHTTP }
@@ -228,8 +233,21 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 		// second one would produce a less specific error.
 		client = &http.Client{}
 	}
+	var proxyRoute *proxyTransport
 	configured := *client
 	client = &configured
+	if c.ProxyProfile != "" {
+		profile, ok := h.ProxyProfiles[c.ProxyProfile]
+		if !ok {
+			return check.StatusUnknown, 0, "proxy profile is not configured on this prober"
+		}
+		transport, err := newProxyTransport(profile, h.Policy, c.Vantage, roots)
+		if err != nil {
+			return check.StatusUnknown, 0, err.Error()
+		}
+		client.Transport = transport
+		proxyRoute = transport
+	}
 	// Arbitrary monitor headers commonly contain API keys. Go only strips a
 	// small built-in set on cross-origin redirects, so do not follow any
 	// redirect when custom credentials are present.
@@ -274,6 +292,9 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 	resp, err := client.Do(req)
 	latency := time.Since(start)
 	if err != nil {
+		if proxyRoute != nil && !proxyRoute.established.Load() && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+			return check.StatusUnknown, 0, "proxy route could not be established"
+		}
 		status, detail := classify(err)
 		return status, 0, detail
 	}

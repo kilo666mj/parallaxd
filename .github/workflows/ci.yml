@@ -56,6 +56,8 @@ jobs:
         run: go test -race ./...
       - name: Test selective deployment versions
         run: ansible/scripts/test-component-version.sh
+      - name: Test operational assurance
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
   # parallaxd is a coordinator plus a prober agent, so a green test run is not
   # enough — everything also has to still compile on the deploy Go version.

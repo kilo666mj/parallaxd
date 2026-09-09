@@ -1,0 +1,41 @@
+---
+- name: Install backup restore verification service
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/parallaxd-verify-backup-{{ backup_instance.name }}.service"
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Restore-test Parallaxd backup {{ backup_instance.name }}
+      RequiresMountsFor={{ backup_instance.root }}
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/libexec/parallaxd/parallaxd-verify -verify-backup {{ backup_instance.root }}
+      TimeoutStartSec=15min
+      UMask=0077
+      PrivateNetwork=true
+      PrivateTmp=true
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+
+- name: Install daily backup restore verification timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/parallaxd-verify-backup-{{ backup_instance.name }}.timer"
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Verify Parallaxd backup {{ backup_instance.name }} after the backup window
+      [Timer]
+      OnCalendar={{ parallaxd_backup_verify_calendar | default('*-*-* 06:30:00') }}
+      RandomizedDelaySec=5min
+      Persistent=true
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable backup verification timer
+  when: not ansible_check_mode
+  ansible.builtin.systemd_service:
+    name: "parallaxd-verify-backup-{{ backup_instance.name }}.timer"
+    daemon_reload: true
+    enabled: true
+    state: started

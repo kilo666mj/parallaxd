@@ -117,6 +117,26 @@ func (c *Coordinator) snapshot() persistedState {
 		components[k] = v
 	}
 	s := persistedState{Version: 6, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy, Monitors: c.monitorList(), MonitorRevisions: append([]MonitorRevision(nil), c.monitorRevisions...), NextMonitorRevision: c.nextMonitorRevision}
+	// Older coordinators must reject state containing proxy routes instead of
+	// silently restoring those monitors as direct checks. Include rollback
+	// revisions because they can reintroduce a removed route.
+	proxyCatalog := func(monitors []MonitorSpec) bool {
+		for _, m := range monitors {
+			if m.ProxyProfile != "" {
+				return true
+			}
+		}
+		return false
+	}
+	if proxyCatalog(s.Monitors) {
+		s.Version = 7
+	}
+	for _, revision := range s.MonitorRevisions {
+		if proxyCatalog(revision.Catalog) {
+			s.Version = 7
+		}
+	}
+
 	for k, v := range c.lastScheduled {
 		s.LastScheduled[k] = v
 	}
@@ -173,7 +193,7 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version < 1 || s.Version > 6 {
+	if s.Version < 1 || s.Version > 7 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
 	return c.applyPersistedState(s, false)

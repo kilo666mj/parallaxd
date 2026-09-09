@@ -66,7 +66,8 @@ type config struct {
 
 	// DenyTargets is subtracted from whatever AllowTargets permits. Deny
 	// wins, so a narrow exclusion inside a broad allowance works.
-	DenyTargets []string `json:"deny_targets,omitempty"`
+	DenyTargets   []string                      `json:"deny_targets,omitempty"`
+	ProxyProfiles map[string]probe.ProxyProfile `json:"proxy_profiles,omitempty"`
 
 	// Checks assigned to this prober. In steady state only these run here;
 	// everything else happens on request. Later this comes from the
@@ -111,6 +112,7 @@ type checkConfig struct {
 	GRPCService      string            `json:"grpc_service,omitempty"`
 	GRPCTLS          bool              `json:"grpc_tls,omitempty"`
 	CAFile           string            `json:"ca_file,omitempty"`
+	ProxyProfile     string            `json:"proxy_profile,omitempty"`
 	TLSExpiryWarning duration          `json:"tls_expiry_warning,omitempty"`
 
 	// Prober is accepted and ignored here: the coordinator uses it to know who
@@ -128,7 +130,7 @@ func (c checkConfig) toCheck() check.Check {
 		Send: c.Send, HTTPMethod: c.HTTPMethod, HTTPHeaders: c.HTTPHeaders,
 		HTTPBody: c.HTTPBody, ServerName: c.ServerName, StartTLS: c.StartTLS, DNSRecord: c.DNSRecord,
 		DNSServer: c.DNSServer, DNSRCode: c.DNSRCode, GRPCService: c.GRPCService, GRPCTLS: c.GRPCTLS,
-		CAFile:           c.CAFile,
+		CAFile: c.CAFile, ProxyProfile: c.ProxyProfile,
 		TLSExpiryWarning: time.Duration(c.TLSExpiryWarning),
 	}
 }
@@ -235,7 +237,8 @@ func run(configPath string, log *slog.Logger) error {
 	p, err := prober.New(prober.Config{
 		Name: cfg.Name, Provider: cfg.Provider,
 		Key: key, Keyring: ring, CoordinatorName: cfg.CoordinatorName, Logger: log,
-		Policy: probe.Policy{Allow: allow, Deny: deny, RequireAllowForInternal: true},
+		Policy:        probe.Policy{Allow: allow, Deny: deny, RequireAllowForInternal: true},
+		ProxyProfiles: cfg.ProxyProfiles,
 	})
 	if err != nil {
 		return err

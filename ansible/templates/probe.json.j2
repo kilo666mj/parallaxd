@@ -1,5 +1,6 @@
 {
   "name": "{{ inventory_hostname }}",
+  "proxy_profiles": {{ parallaxd_proxy_profiles | to_json }},
   "provider": "{{ parallaxd_provider }}",
   "listen": "{{ parallaxd_prober_listen }}",
   "key_file": "{{ parallaxd_key_dir }}/private",
