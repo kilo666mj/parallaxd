@@ -244,6 +244,7 @@ existing source allowlist or transport requirements. See the complete
 
 ## Operations
 
+- [Architecture and failure model](docs/architecture.md)
 - [Recurring operations](docs/operations.md)
 - [Operational acceptance exercise](docs/acceptance.md) and
   [example record](docs/acceptance-example.md)
