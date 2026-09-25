@@ -6,7 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/kilo666mj/mcpkit v0.1.0
-	github.com/kilo666mj/tintwire-go v0.1.1-0.20260917125955-fbc5dae955ac
+	github.com/kilo666mj/tintwire-go v0.1.1-0.20260924121825-9d99d82a8bab
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
