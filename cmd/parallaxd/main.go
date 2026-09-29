@@ -28,7 +28,7 @@ import (
 	"github.com/kilo666mj/parallaxd/internal/coordinator"
 	"github.com/kilo666mj/parallaxd/internal/mcpserver"
 	"github.com/kilo666mj/parallaxd/internal/wire"
-	tintwire "github.com/kilo666mj/tintwire-go"
+	tintwire "go.michaelspost.com/tintwire-go"
 )
 
 // version is overridden at link time with -X main.version=<tag>.

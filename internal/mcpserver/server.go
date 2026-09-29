@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kilo666mj/mcpkit"
 	"github.com/kilo666mj/parallaxd/internal/coordinator"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.michaelspost.com/mcpkit"
 )
 
 // Hosted returns a bounded stateless Streamable HTTP MCP handler backed by the
