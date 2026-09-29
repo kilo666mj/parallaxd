@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/kilo666mj/parallaxd/internal/quorum"
-	tintwire "github.com/kilo666mj/tintwire-go"
+	tintwire "go.michaelspost.com/tintwire-go"
 )
 
 type captureTintwirePublisher struct {

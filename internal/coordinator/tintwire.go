@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tintwire "github.com/kilo666mj/tintwire-go"
+	tintwire "go.michaelspost.com/tintwire-go"
 )
 
 type tintwirePublisher interface {

@@ -5,9 +5,9 @@ go 1.27.1
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-jose/go-jose/v4 v4.1.5
-	github.com/kilo666mj/mcpkit v0.1.0
-	github.com/kilo666mj/tintwire-go v0.2.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	go.michaelspost.com/mcpkit v0.2.0
+	go.michaelspost.com/tintwire-go v0.3.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
 	golang.org/x/oauth2 v0.37.0
