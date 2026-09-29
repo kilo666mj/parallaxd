@@ -60,6 +60,7 @@ func tintwireCard(alert Alert, channel, source string) tintwire.Card {
 		Channel: channel, Title: truncateRunes(title, 200), Summary: truncateRunes(summary, 500),
 		Severity: tintwireSeverity(alert.Kind), Source: source,
 	}
+	card.State, card.LifecycleKey = tintwireLifecycle(alert)
 	if alert.Check != "" {
 		card.Fields = append(card.Fields,
 			tintwire.Field{Label: "Target", Value: truncateRunes(alert.Target, 1000)},
@@ -85,6 +86,62 @@ func tintwireCard(alert Alert, channel, source string) tintwire.Card {
 		card.Badges = append(card.Badges, tintwire.Badge{Label: truncateRunes("ESCALATION — "+alert.Escalation, 80), Tone: tintwire.ToneCritical})
 	}
 	return card
+}
+
+// tintwireLifecycle pairs each problem kind with the kind that clears it, so
+// Tintwire shows one card per incident that moves from firing to resolved, as
+// it does for Alertmanager. The key names the pair and the subject, never the
+// time, so a recurrence reopens the same card rather than adding another.
+func tintwireLifecycle(alert Alert) (tintwire.State, string) {
+	var family string
+	state := tintwire.StateFiring
+	switch alert.Kind {
+	case KindRecovered:
+		state = tintwire.StateResolved
+		fallthrough
+	case KindDown:
+		family = "down"
+	case KindReporting:
+		state = tintwire.StateResolved
+		fallthrough
+	case KindSilent:
+		family = "silent"
+	case KindRejoined:
+		state = tintwire.StateResolved
+		fallthrough
+	case KindIsolated:
+		family = "isolated"
+	case KindWatched:
+		state = tintwire.StateResolved
+		fallthrough
+	case KindUnwatched:
+		family = "unwatched"
+	case KindWatchRecovered:
+		state = tintwire.StateResolved
+		fallthrough
+	case KindWatchLost:
+		family = "coordinator-silent"
+	default:
+		return "", ""
+	}
+	subject := "coordinator"
+	switch {
+	case alert.Prober != "":
+		subject = "prober:" + alert.Prober
+	case alert.Component != "":
+		subject = "component:" + alert.Component
+	case alert.Check != "":
+		subject = "check:" + alert.Check
+	}
+	return state, truncateBytes("parallaxd/"+family+"/"+subject, 200)
+}
+
+func truncateBytes(value string, maximum int) string {
+	for len(value) > maximum {
+		_, size := utf8.DecodeLastRuneInString(value)
+		value = value[:len(value)-size]
+	}
+	return value
 }
 
 func tintwireSeverity(kind Kind) tintwire.Severity {

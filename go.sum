@@ -20,8 +20,8 @@ github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zI
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
 go.michaelspost.com/mcpkit v0.2.0 h1:yPLKgDtPvYwM3QswkKjgV0hXWF7BTOfijCXl7kZN1Y0=
 go.michaelspost.com/mcpkit v0.2.0/go.mod h1:BtKSPI3IqSyowCfL3h6hQWdd1S8JaDPZWW2VeSkcp3E=
-go.michaelspost.com/tintwire-go v0.3.0 h1:WA0vcQuQnEYAbLwYwUtIBQI0QDazmKCf7GdiITehyUw=
-go.michaelspost.com/tintwire-go v0.3.0/go.mod h1:DCrfJsZgTWaKHbEgmQHi7UajqVc1C2836dZQMq4owOo=
+go.michaelspost.com/tintwire-go v0.4.0 h1:JOjY4zqH3RdlxBSQJJg+dyFH2xQn9iO/s06TGY9EzCI=
+go.michaelspost.com/tintwire-go v0.4.0/go.mod h1:DCrfJsZgTWaKHbEgmQHi7UajqVc1C2836dZQMq4owOo=
 golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=
 golang.org/x/crypto v0.57.0/go.mod h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=
 golang.org/x/net v0.59.0 h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=

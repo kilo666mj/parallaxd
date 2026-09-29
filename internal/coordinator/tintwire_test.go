@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kilo666mj/parallaxd/internal/quorum"
 	tintwire "go.michaelspost.com/tintwire-go"
@@ -75,5 +76,38 @@ func TestTintwireNotifierUsesSuccessSeverityForRecovery(t *testing.T) {
 	}
 	if publisher.card.Severity != tintwire.SeveritySuccess {
 		t.Fatalf("severity = %q", publisher.card.Severity)
+	}
+}
+
+func TestTintwireLifecyclePairsProblemsWithRecoveries(t *testing.T) {
+	pairs := []struct{ problem, clear Alert }{
+		{Alert{Check: "website", Kind: KindDown}, Alert{Check: "website", Kind: KindRecovered}},
+		{Alert{Component: "mail", Kind: KindDown}, Alert{Component: "mail", Kind: KindRecovered}},
+		{Alert{Prober: "p1", Kind: KindSilent}, Alert{Prober: "p1", Kind: KindReporting}},
+		{Alert{Prober: "p1", Kind: KindIsolated}, Alert{Prober: "p1", Kind: KindRejoined}},
+		{Alert{Kind: KindUnwatched}, Alert{Kind: KindWatched}},
+		{Alert{Kind: KindWatchLost}, Alert{Kind: KindWatchRecovered}},
+	}
+	seen := map[string]bool{}
+	for _, pair := range pairs {
+		problemState, problemKey := tintwireLifecycle(pair.problem)
+		clearState, clearKey := tintwireLifecycle(pair.clear)
+		if problemState != tintwire.StateFiring || clearState != tintwire.StateResolved || problemKey == "" || problemKey != clearKey {
+			t.Fatalf("%s/%s lifecycle = (%q,%q) (%q,%q)", pair.problem.Kind, pair.clear.Kind, problemState, problemKey, clearState, clearKey)
+		}
+		if seen[problemKey] {
+			t.Fatalf("lifecycle key %q reused across pairs", problemKey)
+		}
+		seen[problemKey] = true
+	}
+	if _, key := tintwireLifecycle(Alert{Check: "other", Kind: KindDown}); seen[key] {
+		t.Fatalf("different check shares key %q", key)
+	}
+	if _, key := tintwireLifecycle(Alert{Check: strings.Repeat("é", 300), Kind: KindDown}); len(key) > 200 || !utf8.ValidString(key) {
+		t.Fatalf("long key = %d bytes, valid UTF-8 = %v", len(key), utf8.ValidString(key))
+	}
+	card := tintwireCard(Alert{Check: "website", Kind: KindDown}, "", "")
+	if card.State != tintwire.StateFiring || card.LifecycleKey == "" || card.Validate() != nil {
+		t.Fatalf("card lifecycle = %q/%q", card.State, card.LifecycleKey)
 	}
 }
