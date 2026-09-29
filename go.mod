@@ -7,7 +7,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.michaelspost.com/mcpkit v0.2.0
-	go.michaelspost.com/tintwire-go v0.3.0
+	go.michaelspost.com/tintwire-go v0.4.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
 	golang.org/x/oauth2 v0.37.0
