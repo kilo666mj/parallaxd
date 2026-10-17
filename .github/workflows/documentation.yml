@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kilo666mj/michaelspost-docs
-          ref: d2ec52dfb9498cded5e2cba4516784d87ed7ec18
+          ref: b1a8db86270bdea18d30cfd9238ff1a9be9d352c
           path: .documentation-tooling
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
