@@ -36,6 +36,7 @@ import (
 	"github.com/kilo666mj/parallaxd/internal/check"
 	"github.com/kilo666mj/parallaxd/internal/quorum"
 	"github.com/kilo666mj/parallaxd/internal/wire"
+	"go.michaelspost.com/oidcrp"
 )
 
 const (
@@ -248,7 +249,7 @@ type Coordinator struct {
 	apiTokens     map[string]APIToken
 	sessions      map[string]Session
 	loginFailures map[string][]time.Time
-	oidc          oidcRuntime
+	oidc          *oidcrp.Service
 
 	// silent tracks which probers have already been reported as not reporting,
 	// so a dead one produces one alert rather than one per watch tick.
@@ -588,8 +589,8 @@ func New(cfg Config) (*Coordinator, error) {
 		apiTokens:     map[string]APIToken{},
 		sessions:      map[string]Session{},
 		loginFailures: map[string][]time.Time{},
-		oidc:          oidcRuntime{attempts: map[string]oidcAttempt{}},
 	}
+	coord.oidc = coord.newOIDC()
 	for _, chk := range cfg.Checks {
 		monitor := monitorFromCheck(chk)
 		coord.monitors[monitor.Name] = monitor
