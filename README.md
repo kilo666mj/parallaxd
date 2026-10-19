@@ -133,6 +133,13 @@ custom CA, and no remote alert destination. Alerts are still recorded locally.
 Before using the deployment in production, configure a watcher destination and
 protect `group_vars/all.yml` with Ansible Vault or your normal secret manager.
 
+To keep site data out of the checkout, put `inventory`, `group_vars/all.yml`
+and `host_vars/` in a separate private directory and pass `-i <dir>/inventory`.
+Remove the in-checkout copies: Ansible gives `group_vars/` and `host_vars/`
+next to the playbook precedence over those next to the inventory. Set
+`parallaxd_switchboard_token_file` there too if you run
+`provision-switchboard.yml`.
+
 Start with the documented variables in
 [`ansible/group_vars/parallaxd.yml`](ansible/group_vars/parallaxd.yml). The
 playbook generates signing keys on their owning hosts, validates rendered

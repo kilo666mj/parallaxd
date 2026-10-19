@@ -4,12 +4,15 @@
   become: true
   serial: 1
   vars:
-    switchboard_token_file: "{{ playbook_dir }}/local/switchboard_mcp_token"
+    # Set parallaxd_switchboard_token_file in inventory to keep the credential
+    # outside this checkout; vault-encrypted files work with the file lookup.
+    switchboard_token_file: >-
+      {{ parallaxd_switchboard_token_file | default(playbook_dir ~ '/local/switchboard_mcp_token') }}
 
   tasks:
     - name: Create the private controller credential directory
       ansible.builtin.file:
-        path: "{{ playbook_dir }}/local"
+        path: "{{ switchboard_token_file | dirname }}"
         state: directory
         mode: "0700"
       delegate_to: localhost
