@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -9,14 +10,49 @@ import (
 	"time"
 )
 
-// Maintenance is a configured interval during which matching alerts are
-// recorded but not delivered. Empty Checks and Components means fleet-wide.
+var (
+	errMaintenanceNotFound   = errors.New("maintenance window not found")
+	errMaintenanceExists     = errors.New("maintenance window already exists")
+	errMaintenanceConfigured = errors.New("maintenance window is defined in the coordinator configuration")
+)
+
+// Maintenance is an interval during which matching alerts are recorded but
+// not delivered. Empty Checks, Components and Probers means fleet-wide.
+// Windows come from the configuration (read-only) or from the operator API,
+// which persists and replicates them.
 type Maintenance struct {
-	Name       string    `json:"name"`
-	StartsAt   time.Time `json:"starts_at"`
-	EndsAt     time.Time `json:"ends_at"`
+	Name     string    `json:"name"`
+	StartsAt time.Time `json:"starts_at"`
+	EndsAt   time.Time `json:"ends_at"`
+	// Every repeats the window at a fixed period after StartsAt, such as
+	// "24h" or "168h".
+	Every      string    `json:"every,omitempty"`
 	Checks     []string  `json:"checks,omitempty"`
 	Components []string  `json:"components,omitempty"`
+	Probers    []string  `json:"probers,omitempty"`
+	Comment    string    `json:"comment,omitempty"`
+	Source     string    `json:"source,omitempty"`
+	CreatedAt  time.Time `json:"created_at,omitzero"`
+	CreatedBy  string    `json:"created_by,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitzero"`
+	UpdatedBy  string    `json:"updated_by,omitempty"`
+}
+
+const (
+	maintenanceFromConfig = "config"
+	maintenanceFromAPI    = "api"
+)
+
+func (m Maintenance) active(now time.Time) bool {
+	if now.Before(m.StartsAt) {
+		return false
+	}
+	if every, err := time.ParseDuration(m.Every); err == nil && every > 0 {
+		// shortcut: a fixed period ignores DST, so a weekly window moves by an hour
+		// in local time twice a year; add a time zone if that starts to matter.
+		now = now.Add(-now.Sub(m.StartsAt) / every * every)
+	}
+	return now.Before(m.EndsAt)
 }
 
 type Incident struct {
@@ -54,30 +90,110 @@ func (c *Coordinator) emit(ctx context.Context, a Alert) {
 }
 
 func (c *Coordinator) activeMaintenance(a Alert, now time.Time) string {
-	for _, m := range c.cfg.Maintenance {
-		if now.Before(m.StartsAt) || !now.Before(m.EndsAt) {
-			continue
-		}
-		if len(m.Checks) == 0 && len(m.Components) == 0 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, m := range c.maintenanceLocked() {
+		if m.active(now) && alertMatches(a, m.Checks, m.Components, m.Probers) {
 			return m.Name
-		}
-		for _, name := range m.Checks {
-			if name == a.Check {
-				return m.Name
-			}
-			for _, member := range a.Members {
-				if name == member.Check {
-					return m.Name
-				}
-			}
-		}
-		for _, name := range m.Components {
-			if name == a.Component {
-				return m.Name
-			}
 		}
 	}
 	return ""
+}
+
+// maintenanceLocked returns configured windows followed by managed ones. It is
+// called while c.mu is held.
+func (c *Coordinator) maintenanceLocked() []Maintenance {
+	out := make([]Maintenance, 0, len(c.cfg.Maintenance)+len(c.maintenance))
+	for _, m := range c.cfg.Maintenance {
+		m.Source = maintenanceFromConfig
+		out = append(out, m)
+	}
+	return append(out, c.maintenance...)
+}
+
+// MaintenanceWindows returns every configured and managed maintenance window.
+func (c *Coordinator) MaintenanceWindows() []Maintenance {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.maintenanceLocked()
+}
+
+// PutMaintenance creates or replaces a managed maintenance window.
+func (c *Coordinator) PutMaintenance(m Maintenance, actor string, create bool) (Maintenance, error) {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return Maintenance{}, errors.New("actor is required")
+	}
+	now := c.now().UTC()
+	m.Name = strings.TrimSpace(m.Name)
+	m.StartsAt, m.EndsAt = m.StartsAt.UTC(), m.EndsAt.UTC()
+	if m.StartsAt.IsZero() && create {
+		m.StartsAt = now
+	}
+	m.Source, m.UpdatedAt, m.UpdatedBy = maintenanceFromAPI, now, actor
+	if err := m.Validate(); err != nil {
+		return Maintenance{}, err
+	}
+	if err := c.validateScope(m.Checks, m.Components, m.Probers); err != nil {
+		return Maintenance{}, err
+	}
+	c.mu.Lock()
+	for _, configured := range c.cfg.Maintenance {
+		if configured.Name == m.Name {
+			c.mu.Unlock()
+			return Maintenance{}, errMaintenanceConfigured
+		}
+	}
+	index := -1
+	for i, existing := range c.maintenance {
+		if existing.Name == m.Name {
+			index = i
+		}
+	}
+	switch {
+	case create && index >= 0:
+		c.mu.Unlock()
+		return Maintenance{}, errMaintenanceExists
+	case !create && index < 0:
+		c.mu.Unlock()
+		return Maintenance{}, errMaintenanceNotFound
+	case create:
+		m.CreatedAt, m.CreatedBy = now, actor
+		c.maintenance = append(c.maintenance, m)
+	default:
+		m.CreatedAt, m.CreatedBy = c.maintenance[index].CreatedAt, c.maintenance[index].CreatedBy
+		c.maintenance[index] = m
+	}
+	c.mu.Unlock()
+	c.persist()
+	c.log.Info("maintenance window saved", "name", m.Name, "actor", actor, "created", create)
+	return m, nil
+}
+
+// DeleteMaintenance removes a managed maintenance window.
+func (c *Coordinator) DeleteMaintenance(name, actor, note string) error {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return errors.New("actor is required")
+	}
+	c.mu.Lock()
+	for _, configured := range c.cfg.Maintenance {
+		if configured.Name == name {
+			c.mu.Unlock()
+			return errMaintenanceConfigured
+		}
+	}
+	for i, existing := range c.maintenance {
+		if existing.Name == name {
+			c.maintenance = append(c.maintenance[:i:i], c.maintenance[i+1:]...)
+			c.mu.Unlock()
+			c.persist()
+			c.log.Info("maintenance window deleted", "name", name, "actor", actor, "note", strings.TrimSpace(note))
+			return nil
+		}
+	}
+	c.mu.Unlock()
+	return errMaintenanceNotFound
 }
 
 func (c *Coordinator) recordIncident(a Alert, maintenance string, silenceID uint64, silence string) {
@@ -121,7 +237,72 @@ func (c *Coordinator) handleIncidents(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, c.Incidents())
 }
 func (c *Coordinator) handleMaintenance(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, c.cfg.Maintenance)
+	writeJSON(w, c.MaintenanceWindows())
+}
+
+type maintenanceRequest struct {
+	Name       string    `json:"name,omitempty"`
+	StartsAt   time.Time `json:"starts_at,omitzero"`
+	EndsAt     time.Time `json:"ends_at"`
+	Every      string    `json:"every,omitempty"`
+	Checks     []string  `json:"checks,omitempty"`
+	Components []string  `json:"components,omitempty"`
+	Probers    []string  `json:"probers,omitempty"`
+	Comment    string    `json:"comment,omitempty"`
+	Actor      string    `json:"actor,omitempty"`
+}
+
+func (c *Coordinator) handlePutMaintenance(w http.ResponseWriter, r *http.Request) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
+		return
+	}
+	var body maintenanceRequest
+	if err := decodeOperatorJSON(w, r, &body); err != nil {
+		http.Error(w, "malformed request", http.StatusBadRequest)
+		return
+	}
+	create := r.Method == http.MethodPost
+	if !create {
+		if body.Name != "" && body.Name != r.PathValue("name") {
+			http.Error(w, "name in the body must match the path", http.StatusBadRequest)
+			return
+		}
+		body.Name = r.PathValue("name")
+	}
+	m, err := c.PutMaintenance(Maintenance{
+		Name: body.Name, StartsAt: body.StartsAt, EndsAt: body.EndsAt, Every: body.Every,
+		Checks: body.Checks, Components: body.Components, Probers: body.Probers, Comment: body.Comment,
+	}, mutationActor(principal, body.Actor), create)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	// A shortened or narrowed window may end suppression of an active incident.
+	c.releaseSuppressions(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	if create {
+		w.WriteHeader(http.StatusCreated)
+	}
+	writeJSON(w, m)
+}
+
+func (c *Coordinator) handleDeleteMaintenance(w http.ResponseWriter, r *http.Request) {
+	principal, ok := c.requirePermission(w, r, PermissionOperate)
+	if !ok {
+		return
+	}
+	var body incidentMutation
+	if err := decodeOperatorJSON(w, r, &body); err != nil {
+		http.Error(w, "malformed request", http.StatusBadRequest)
+		return
+	}
+	if err := c.DeleteMaintenance(r.PathValue("name"), mutationActor(principal, body.Actor), body.Note); err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	c.releaseSuppressions(r.Context())
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (m Maintenance) Validate() error {
@@ -130,6 +311,15 @@ func (m Maintenance) Validate() error {
 	}
 	if m.StartsAt.IsZero() || !m.EndsAt.After(m.StartsAt) {
 		return fmt.Errorf("maintenance %q has an invalid interval", m.Name)
+	}
+	if m.Every != "" {
+		every, err := time.ParseDuration(m.Every)
+		if err != nil || every <= 0 {
+			return fmt.Errorf("maintenance %q has an invalid every %q", m.Name, m.Every)
+		}
+		if m.EndsAt.Sub(m.StartsAt) >= every {
+			return fmt.Errorf("maintenance %q lasts at least as long as its repeat period", m.Name)
+		}
 	}
 	return nil
 }

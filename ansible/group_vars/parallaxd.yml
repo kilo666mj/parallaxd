@@ -276,6 +276,10 @@ parallaxd_checks: []
 
 parallaxd_components: []
 
+# Read-only maintenance windows. Each has name, starts_at and ends_at (RFC
+# 3339), optional every ("168h" repeats weekly) and optional checks, components
+# or probers. Windows that change often are better managed through the API or
+# MCP tools; see docs/operations.md#maintenance-windows.
 parallaxd_maintenance: []
 
 # ---------------------------------------------------------------------------

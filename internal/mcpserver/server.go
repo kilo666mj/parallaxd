@@ -80,6 +80,29 @@ type historyInput struct {
 	Limit int    `json:"limit,omitempty" jsonschema:"maximum observations from 1 through 10000; defaults to 1000"`
 }
 
+type maintenanceInput struct {
+	Name       string   `json:"name" jsonschema:"maintenance window name"`
+	StartsAt   string   `json:"starts_at,omitempty" jsonschema:"optional RFC3339 start of the first occurrence; defaults to now when creating"`
+	EndsAt     string   `json:"ends_at" jsonschema:"RFC3339 end of the first occurrence"`
+	Every      string   `json:"every,omitempty" jsonschema:"optional repeat period as a Go duration, such as 24h or 168h; must exceed the window length"`
+	Checks     []string `json:"checks,omitempty" jsonschema:"optional monitor names to suppress"`
+	Components []string `json:"components,omitempty" jsonschema:"optional component names to suppress"`
+	Probers    []string `json:"probers,omitempty" jsonschema:"optional prober names to suppress"`
+	Comment    string   `json:"comment,omitempty" jsonschema:"optional operator note"`
+}
+
+type deleteMaintenanceInput struct {
+	Name string `json:"name" jsonschema:"managed maintenance window name"`
+	Note string `json:"note,omitempty" jsonschema:"optional reason recorded in the coordinator log"`
+}
+
+func maintenanceBody(client Client, input maintenanceInput) any {
+	return struct {
+		maintenanceInput
+		Actor string `json:"actor,omitempty"`
+	}{input, client.Actor}
+}
+
 func New(client Client, version string) *mcp.Server {
 	server := mcpkit.MustServer(mcpkit.ServerConfig{Name: "parallaxd", Version: version,
 		Instructions: "Use Parallaxd tools to inspect corroborated availability and manage the live monitor catalogue. Validate and test monitors before saving changes."})
@@ -91,6 +114,7 @@ func New(client Client, version string) *mcp.Server {
 	addGetTool(server, client, "parallaxd_get_history_summary", "Read retained availability and latency summaries for all monitors.", "/v1/history/summary")
 	addGetTool(server, client, "parallaxd_get_monitor_options", "List registered probers and providers available for monitor ownership and corroboration.", "/v1/monitor-options")
 	addGetTool(server, client, "parallaxd_list_monitor_revisions", "Read monitor catalogue revision history for audit and recovery.", "/v1/monitors/revisions")
+	addGetTool(server, client, "parallaxd_list_maintenance", "List configured and managed maintenance windows, including recurring ones.", "/v1/maintenance")
 
 	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_get_history", Description: "Read retained observations, optionally filtered by monitor and time.", Annotations: mcpkit.ReadOnly(false)},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input historyInput) (*mcp.CallToolResult, document, error) {
@@ -165,6 +189,29 @@ func New(client Client, version string) *mcp.Server {
 			return mutate(ctx, func(out *any) error {
 				return client.Post(ctx, path, map[string]string{"actor": client.Actor}, out)
 			})
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_create_maintenance", Description: "Schedule a one-off or recurring maintenance window that records but does not deliver matching alerts. Omit checks, components and probers for the whole fleet. Requires an operator or admin token.", Annotations: mcpkit.Mutating(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input maintenanceInput) (*mcp.CallToolResult, document, error) {
+			return mutate(ctx, func(out *any) error { return client.Post(ctx, "/v1/maintenance", maintenanceBody(client, input), out) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_update_maintenance", Description: "Replace a managed maintenance window. Configured windows are read-only. Requires an operator or admin token.", Annotations: mcpkit.Destructive(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input maintenanceInput) (*mcp.CallToolResult, document, error) {
+			if strings.TrimSpace(input.Name) == "" {
+				return nil, document{}, fmt.Errorf("name is required")
+			}
+			path := "/v1/maintenance/" + url.PathEscape(input.Name)
+			return mutate(ctx, func(out *any) error { return client.Put(ctx, path, maintenanceBody(client, input), out) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_delete_maintenance", Description: "Delete a managed maintenance window; alerts still active when suppression ends are delivered. Requires an operator or admin token.", Annotations: mcpkit.Destructive(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input deleteMaintenanceInput) (*mcp.CallToolResult, document, error) {
+			if strings.TrimSpace(input.Name) == "" {
+				return nil, document{}, fmt.Errorf("name is required")
+			}
+			path := "/v1/maintenance/" + url.PathEscape(input.Name)
+			if err := client.Delete(ctx, path, map[string]string{"actor": client.Actor, "note": input.Note}); err != nil {
+				return nil, document{}, err
+			}
+			return nil, document{Data: map[string]any{"deleted": true, "name": input.Name}}, nil
 		})
 	return server
 }

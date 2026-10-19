@@ -47,7 +47,13 @@ func (c *Coordinator) validateSilence(s Silence) error {
 	if s.StartsAt.IsZero() || !s.EndsAt.After(s.StartsAt) {
 		return errors.New("silence has an invalid interval")
 	}
-	for _, name := range s.Checks {
+	return c.validateScope(s.Checks, s.Components, s.Probers)
+}
+
+// validateScope rejects suppression targets that name unknown checks,
+// components or probers.
+func (c *Coordinator) validateScope(checks, components, probers []string) error {
+	for _, name := range checks {
 		if _, ok := c.checkByName(name); !ok {
 			return fmt.Errorf("unknown check %q", name)
 		}
@@ -56,12 +62,12 @@ func (c *Coordinator) validateSilence(s Silence) error {
 	for _, component := range c.cfg.Components {
 		knownComponents[component.Name] = true
 	}
-	for _, name := range s.Components {
+	for _, name := range components {
 		if !knownComponents[name] {
 			return fmt.Errorf("unknown component %q", name)
 		}
 	}
-	for _, name := range s.Probers {
+	for _, name := range probers {
 		if _, ok := c.byName[name]; !ok {
 			return fmt.Errorf("unknown prober %q", name)
 		}
@@ -110,9 +116,9 @@ func (c *Coordinator) activeSilence(a Alert, now time.Time) (uint64, string) {
 // suppressionActiveLocked is called while c.mu is held.
 func (c *Coordinator) suppressionActiveLocked(incident Incident, now time.Time) bool {
 	if incident.Maintenance != "" {
-		for _, maintenance := range c.cfg.Maintenance {
-			if maintenance.Name == incident.Maintenance &&
-				!now.Before(maintenance.StartsAt) && now.Before(maintenance.EndsAt) {
+		for _, maintenance := range c.maintenanceLocked() {
+			if maintenance.Name == incident.Maintenance && maintenance.active(now) &&
+				alertMatches(incident.Alert, maintenance.Checks, maintenance.Components, maintenance.Probers) {
 				return true
 			}
 		}
@@ -276,9 +282,9 @@ func incidentID(r *http.Request) (uint64, error) {
 
 func writeMutationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errIncidentNotFound), errors.Is(err, errSilenceNotFound):
+	case errors.Is(err, errIncidentNotFound), errors.Is(err, errSilenceNotFound), errors.Is(err, errMaintenanceNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, errIncidentInactive):
+	case errors.Is(err, errIncidentInactive), errors.Is(err, errMaintenanceExists), errors.Is(err, errMaintenanceConfigured):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
