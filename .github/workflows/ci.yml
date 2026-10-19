@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: "1.27.2"
+          go-version-file: go.mod
           cache: true
       - name: Lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
@@ -38,12 +38,8 @@ jobs:
             exit 1
           fi
       - name: Check go.mod is tidy
-        # A library's go.mod is part of its public contract: a stale require
-        # or a missing sum breaks every consumer's build, not just this repo's.
-        # git status rather than git diff: with no third-party dependencies
-        # there is no go.sum, and `git diff go.sum` fails outright on a path
-        # that does not exist. status also catches tidy *creating* a go.sum,
-        # which diff against the index would miss.
+        # A stale require or missing sum breaks reproducible builds and hides
+        # dependency changes from review.
         run: |
           go mod tidy
           if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
@@ -69,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: "1.27.2"
+          go-version-file: go.mod
           cache: true
       - name: Build
         run: go build ./...
@@ -87,7 +83,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: "1.27.2"
+          go-version-file: go.mod
           cache: true
       - name: Build static binaries
         env:
