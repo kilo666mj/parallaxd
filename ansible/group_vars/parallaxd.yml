@@ -99,12 +99,17 @@ parallaxd_prober_allow_sources: >-
       + (groups['parallaxd_probers'] | default([])
          | map('extract', hostvars, 'parallaxd_address') | list)) | unique | list }}
 
-# Sources permitted to reach the coordinator's port: every prober.
+# Sources permitted to reach the coordinator's port: every prober, plus any
+# extra IPv4 addresses such as a Prometheus server scraping /metrics. Prefer
+# a private transport; an address added here talks plain HTTP to the API.
+# Set parallaxd_coordinator_extra_allow_sources in your inventory; it has no
+# default here because these group_vars would override the inventory's.
 parallaxd_coordinator_allow_sources: >-
   {{ (groups['parallaxd_probers'] | default([])
       | map('extract', hostvars, 'parallaxd_address') | list)
      + ([parallaxd_ha_standby_address]
-        if parallaxd_standby_hosts | length > 0 else []) }}
+        if parallaxd_standby_hosts | length > 0 else [])
+     + (parallaxd_coordinator_extra_allow_sources | default([])) }}
 
 # ---------------------------------------------------------------------------
 # Coordinator
