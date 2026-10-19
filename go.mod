@@ -6,7 +6,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.michaelspost.com/mcpkit v0.2.0
-	go.michaelspost.com/oidcrp v0.4.0
+	go.michaelspost.com/oidcrp v0.4.1
 	go.michaelspost.com/tintwire-go v0.4.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
