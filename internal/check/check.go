@@ -129,11 +129,15 @@ type Check struct {
 	CAFile       string            `json:"ca_file,omitempty"`
 	ProxyProfile string            `json:"proxy_profile,omitempty"`
 
-	// TLSExpiryWarning makes an otherwise valid TLS certificate a failed
-	// check when it has this much lifetime or less remaining. Zero disables
+	// TLSExpiryWarning reports an otherwise valid TLS certificate as a
+	// warning when it has this much lifetime or less remaining. Zero disables
 	// proactive expiry checks; the TLS handshake still rejects expired and
 	// not-yet-valid certificates.
 	TLSExpiryWarning time.Duration `json:"tls_expiry_warning,omitempty"`
+
+	// LatencyWarning reports a successful probe that took longer than this
+	// as a warning. Zero disables it. Probers older than this field ignore it.
+	LatencyWarning time.Duration `json:"latency_warning,omitempty"`
 }
 
 // Quorum is the agreement rule.
@@ -213,6 +217,10 @@ func (c Check) Validate() error {
 		return fmt.Errorf("check %q: tls_expiry_warning cannot be negative", c.Name)
 	case c.TLSExpiryWarning > 0 && c.Kind != KindTLS:
 		return fmt.Errorf("check %q: tls_expiry_warning is only valid for TLS checks", c.Name)
+	case c.LatencyWarning < 0:
+		return fmt.Errorf("check %q: latency_warning cannot be negative", c.Name)
+	case c.LatencyWarning > 0 && c.Timeout > 0 && c.LatencyWarning >= c.Timeout:
+		return fmt.Errorf("check %q: latency_warning must be shorter than timeout", c.Name)
 	case strings.TrimSpace(c.Target) == "":
 		return fmt.Errorf("check %q: target is required", c.Name)
 	case c.Vantage != VantagePublic && c.Vantage != VantageInternal:
@@ -275,6 +283,12 @@ const (
 	// timed out, wrong response. This is evidence about the target.
 	StatusDown Status = "down"
 
+	// StatusWarning means the probe completed and the target behaved, but
+	// crossed an advisory threshold: a certificate close to expiry, or a slow
+	// response. It is evidence the target is reachable, so it never counts
+	// toward down, and it alerts with lower urgency than an outage.
+	StatusWarning Status = "warning"
+
 	// StatusUnknown means the prober could not form an opinion — its own
 	// resolver failed, it has no route at all, the attempt was cancelled, or
 	// it was asked for a vantage it cannot offer.
@@ -293,7 +307,8 @@ type Result struct {
 	Status  Status    `json:"status"`
 	At      time.Time `json:"at"`
 
-	// Latency is how long the probe took. Only meaningful when Status is Up.
+	// Latency is how long the probe took. Only meaningful when Status is Up
+	// or Warning.
 	Latency time.Duration `json:"latency,omitempty"`
 
 	// Detail explains a Down or Unknown in terms a human can act on.
@@ -311,7 +326,7 @@ type Result struct {
 // IsEvidence reports whether this result should count toward a verdict. An
 // Unknown is a statement about the prober, not about the target.
 func (r Result) IsEvidence() bool {
-	return r.Status == StatusUp || r.Status == StatusDown
+	return r.Status == StatusUp || r.Status == StatusDown || r.Status == StatusWarning
 }
 
 var routeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)

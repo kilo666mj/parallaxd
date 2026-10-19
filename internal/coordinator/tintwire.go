@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kilo666mj/parallaxd/internal/quorum"
 	tintwire "go.michaelspost.com/tintwire-go"
 )
 
@@ -64,7 +65,7 @@ func tintwireCard(alert Alert, channel, source string) tintwire.Card {
 	if alert.Check != "" {
 		card.Fields = append(card.Fields,
 			tintwire.Field{Label: "Target", Value: truncateRunes(alert.Target, 1000)},
-			tintwire.Field{Label: "Evidence", Value: fmt.Sprintf("%d down · %d up · %d unknown", alert.Verdict.Down, alert.Verdict.Up, alert.Verdict.Unknown)},
+			tintwire.Field{Label: "Evidence", Value: evidenceSummary(alert.Verdict)},
 		)
 		if len(alert.Verdict.Providers) > 0 {
 			card.Fields = append(card.Fields, tintwire.Field{Label: "Providers", Value: truncateRunes(strings.Join(alert.Verdict.Providers, ", "), 1000)})
@@ -101,6 +102,11 @@ func tintwireLifecycle(alert Alert) (tintwire.State, string) {
 		fallthrough
 	case KindDown:
 		family = "down"
+	case KindWarningCleared:
+		state = tintwire.StateResolved
+		fallthrough
+	case KindWarning:
+		family = "warning"
 	case KindReporting:
 		state = tintwire.StateResolved
 		fallthrough
@@ -136,6 +142,13 @@ func tintwireLifecycle(alert Alert) (tintwire.State, string) {
 	return state, truncateBytes("parallaxd/"+family+"/"+subject, 200)
 }
 
+func evidenceSummary(v quorum.Verdict) string {
+	if v.Warning > 0 {
+		return fmt.Sprintf("%d down · %d warning · %d up · %d unknown", v.Down, v.Warning, v.Up, v.Unknown)
+	}
+	return fmt.Sprintf("%d down · %d up · %d unknown", v.Down, v.Up, v.Unknown)
+}
+
 func truncateBytes(value string, maximum int) string {
 	for len(value) > maximum {
 		_, size := utf8.DecodeLastRuneInString(value)
@@ -146,7 +159,7 @@ func truncateBytes(value string, maximum int) string {
 
 func tintwireSeverity(kind Kind) tintwire.Severity {
 	switch kind {
-	case KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
+	case KindRecovered, KindWarningCleared, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
 		return tintwire.SeveritySuccess
 	case KindDown, KindWatchLost:
 		return tintwire.SeverityCritical

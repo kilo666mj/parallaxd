@@ -294,7 +294,7 @@ func (c *Coordinator) SetMCPHandler(handler http.Handler) {
 type entityState struct {
 	mu sync.Mutex
 
-	// status is the last decided verdict: up or down. Unknown means nothing
+	// status is the last decided verdict: up, warning or down. Unknown means nothing
 	// has been decided yet, which is not the same as up — a check that has
 	// never produced a usable result has not been declared healthy.
 	status check.Status
@@ -693,14 +693,21 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 	// The exception is a check whose quorum a single report already satisfies
 	// (Agree: 1): the operator has said one prober suffices, so asking others
 	// would change nothing.
-	if r.Status == check.StatusDown && !c.evaluate(chk, results).Actionable() {
+	//
+	// A warning is corroborated like a failure, so one prober cannot raise it,
+	// but only when it is news: re-confirming a decided warning every interval
+	// would spend N probes per check for as long as a certificate is near
+	// expiry.
+	single := c.evaluate(chk, results)
+	if (r.Status == check.StatusDown && !single.Actionable()) ||
+		(r.Status == check.StatusWarning && single.Status != check.StatusWarning && st.status != check.StatusWarning) {
 		corroborationStarted = time.Now()
 		corroborated := c.corroborate(ctx, chk, r)
 		for _, result := range corroborated {
 			c.recordObservation(chk, result, "corroboration", result.Vantage != chk.Vantage, "")
 		}
 		results = append(results, corroborated...)
-	} else if r.Status == check.StatusUp && st.status == check.StatusDown && chk.Quorum.Agree > 1 {
+	} else if r.Status == check.StatusUp && (st.status == check.StatusDown || st.status == check.StatusWarning) && chk.Quorum.Agree > 1 {
 		// A recovery is a decision too. Requiring corroboration here prevents one
 		// compromised assigned prober from clearing an incident by itself, while
 		// keeping the steady-state cost at one probe when the check is healthy.
@@ -712,10 +719,16 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 	}
 
 	v := c.evaluate(chk, results)
-	if st.status == check.StatusDown && v.Status == check.StatusUp && !recoveryConfirmed(chk, v) {
+	if st.status == check.StatusWarning && r.Status == check.StatusWarning && v.Status == check.StatusUp {
+		// The assigned prober agrees with the decided warning; nothing changed.
+		v.Status = check.StatusWarning
+		v.Reason = fmt.Sprintf("%s still reports the decided warning", r.Prober)
+	}
+	if (st.status == check.StatusDown || st.status == check.StatusWarning) &&
+		v.Status == check.StatusUp && !recoveryConfirmed(chk, v) {
 		v.Status = check.StatusUnknown
 		v.Reason = fmt.Sprintf("recovery unconfirmed: %d of %d reported up, quorum needs %d",
-			v.Up, v.Counted, chk.Quorum.Agree)
+			v.Up+v.Warning, v.Counted, chk.Quorum.Agree)
 		if chk.ProxyProfile != "" {
 			v.Reason += fmt.Sprintf("; %d independent up votes", v.IndependentUp)
 		}
@@ -746,7 +759,7 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 				st.inconclusiveHistory = append([]CorroborationAttempt(nil), st.inconclusiveHistory[len(st.inconclusiveHistory)-maxInconclusiveHistory:]...)
 			}
 		}
-	} else if v.Status == check.StatusUp {
+	} else if v.Status == check.StatusUp || v.Status == check.StatusWarning {
 		st.clearSuspicion()
 	}
 
@@ -797,15 +810,36 @@ func (s *entityState) apply(status check.Status, now time.Time) (bool, Kind) {
 		s.status, s.since = check.StatusDown, now
 		return true, KindDown
 
+	case check.StatusWarning:
+		switch s.status {
+		case check.StatusWarning:
+			return false, ""
+		case check.StatusDown:
+			// The outage is over even though a warning remains, and the
+			// recovery is what closes the outage incident.
+			s.status, s.since = check.StatusWarning, now
+			return true, KindRecovered
+		}
+		// Unlike recovery, a first-ever warning is news: a certificate that
+		// is already close to expiry when monitoring starts still needs action.
+		s.status, s.since = check.StatusWarning, now
+		return true, KindWarning
+
 	case check.StatusUp:
-		wasDown := s.status == check.StatusDown
-		if s.status != check.StatusUp {
+		previous := s.status
+		if previous != check.StatusUp {
 			s.since = now
 		}
 		s.status = check.StatusUp
+		switch previous {
+		case check.StatusDown:
+			return true, KindRecovered
+		case check.StatusWarning:
+			return true, KindWarningCleared
+		}
 		// A first-ever up is not a recovery. Announcing "recovered" for
 		// everything at startup is how a monitoring system gets muted.
-		return wasDown, KindRecovered
+		return false, ""
 
 	default:
 		// Inconclusive. It must not clear a down: not being able to confirm

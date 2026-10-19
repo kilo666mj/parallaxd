@@ -274,3 +274,28 @@ func TestIdleDeliveryLoopDoesNotWriteState(t *testing.T) {
 		t.Fatalf("idle delivery loop wrote state: %v", err)
 	}
 }
+
+func TestWarningsEscalateOnlyThroughPoliciesThatNameThem(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	pager := &sequenceNotifier{}
+	cfg := durableConfig(t, "", &sequenceNotifier{}, nil)
+	cfg.Now = func() time.Time { return now }
+	cfg.Destinations = []NotificationDestination{{Name: "pager", Notifier: pager}}
+	cfg.Routes = []NotificationRoute{{Name: "no initial page", Destination: "pager", Kinds: []Kind{KindRecovered}}}
+	cfg.Escalations = []EscalationPolicy{
+		{Name: "everything", Destination: "pager", After: time.Minute},
+		{Name: "warnings", Destination: "pager", After: time.Minute, Kinds: []Kind{KindWarning}},
+	}
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Process(t.Context(), resultAt(check.StatusWarning, now)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	c.processDeliveries(t.Context())
+	if got := pager.all(); len(got) != 1 || got[0].Escalation != "warnings" {
+		t.Fatalf("escalations = %+v", got)
+	}
+}

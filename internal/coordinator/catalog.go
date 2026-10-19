@@ -44,6 +44,7 @@ type MonitorSpec struct {
 	CAFile           string            `json:"ca_file,omitempty"`
 	ProxyProfile     string            `json:"proxy_profile,omitempty"`
 	TLSExpiryWarning string            `json:"tls_expiry_warning,omitempty"`
+	LatencyWarning   string            `json:"latency_warning,omitempty"`
 }
 
 type MonitorRevision struct {
@@ -70,7 +71,8 @@ func monitorFromCheck(chk check.Check) MonitorSpec {
 		ServerName: chk.ServerName, StartTLS: chk.StartTLS, DNSRecord: chk.DNSRecord,
 		DNSServer: chk.DNSServer, DNSRCode: chk.DNSRCode, GRPCService: chk.GRPCService, GRPCTLS: chk.GRPCTLS,
 		CAFile: chk.CAFile, ProxyProfile: chk.ProxyProfile,
-		TLSExpiryWarning: durationString(chk.TLSExpiryWarning)}
+		TLSExpiryWarning: durationString(chk.TLSExpiryWarning),
+		LatencyWarning:   durationString(chk.LatencyWarning)}
 }
 
 func durationString(value time.Duration) string {
@@ -96,6 +98,13 @@ func (m MonitorSpec) toCheck() (check.Check, error) {
 			return check.Check{}, fmt.Errorf("monitor %q tls_expiry_warning: %w", m.Name, err)
 		}
 	}
+	var latencyWarning time.Duration
+	if value := strings.TrimSpace(m.LatencyWarning); value != "" {
+		latencyWarning, err = time.ParseDuration(value)
+		if err != nil {
+			return check.Check{}, fmt.Errorf("monitor %q latency_warning: %w", m.Name, err)
+		}
+	}
 	return check.Check{Name: strings.TrimSpace(m.Name), Kind: m.Kind, Target: strings.TrimSpace(m.Target),
 		Vantage: m.Vantage, Interval: interval, Timeout: timeout, Quorum: m.Quorum,
 		Prober: m.Prober, Probers: append([]string(nil), m.Probers...), ExpectStatus: append([]int(nil), m.ExpectStatus...), ExpectBody: m.ExpectBody,
@@ -103,7 +112,7 @@ func (m MonitorSpec) toCheck() (check.Check, error) {
 		HTTPBody: m.HTTPBody, ServerName: m.ServerName, StartTLS: m.StartTLS, DNSRecord: m.DNSRecord,
 		DNSServer: m.DNSServer, DNSRCode: m.DNSRCode, GRPCService: m.GRPCService, GRPCTLS: m.GRPCTLS,
 		CAFile: m.CAFile, ProxyProfile: m.ProxyProfile,
-		TLSExpiryWarning: tlsExpiryWarning}, nil
+		TLSExpiryWarning: tlsExpiryWarning, LatencyWarning: latencyWarning}, nil
 }
 
 func cloneStrings(in map[string]string) map[string]string {

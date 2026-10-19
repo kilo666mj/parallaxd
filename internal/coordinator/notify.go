@@ -23,8 +23,16 @@ const (
 	// KindDown is a failure that reached quorum.
 	KindDown Kind = "down"
 
-	// KindRecovered is a check that was down and is now up.
+	// KindRecovered is a check that was down and is now up (or only warning).
 	KindRecovered Kind = "recovered"
+
+	// KindWarning is a warning that reached quorum: the target works but
+	// crossed an advisory threshold. It is not an outage and does not
+	// escalate unless an escalation policy names it.
+	KindWarning Kind = "warning"
+
+	// KindWarningCleared is a check that was warning and is now up.
+	KindWarningCleared Kind = "warning-cleared"
 
 	// KindSilent is a prober that has stopped reporting, so its checks are no
 	// longer being run. Deliberately not KindDown: nobody probed the target,
@@ -162,7 +170,8 @@ func (a Alert) Summary() string {
 		// vaguer than the check alerts it replaced.
 		var failing []string
 		for _, m := range a.Members {
-			if m.Status == string(check.StatusDown) {
+			if m.Status == string(check.StatusDown) ||
+				(a.Kind == KindWarning && m.Status == string(check.StatusWarning)) {
 				failing = append(failing, m.Check)
 			}
 		}
@@ -203,6 +212,10 @@ func (a Alert) verb() string {
 	switch a.Kind {
 	case KindRecovered:
 		verb = "RECOVERED"
+	case KindWarning:
+		verb = "WARNING"
+	case KindWarningCleared:
+		verb = "WARNING CLEARED"
 	case KindSilent:
 		verb = "NOT REPORTING"
 	case KindReporting:
@@ -262,7 +275,7 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) (err error) {
 	default:
 		attrs = []any{
 			"check", a.Check, "target", a.Target, "kind", string(a.Kind),
-			"down", a.Verdict.Down, "up", a.Verdict.Up, "unknown", a.Verdict.Unknown,
+			"down", a.Verdict.Down, "up", a.Verdict.Up, "warning", a.Verdict.Warning, "unknown", a.Verdict.Unknown,
 			"providers", a.Verdict.Providers,
 		}
 		if len(a.Verdict.Dissent) > 0 {
@@ -272,7 +285,7 @@ func (n LogNotifier) Notify(_ context.Context, a Alert) (err error) {
 	// Good news at info, problems at warn: an operator filtering for problems
 	// should not have to read the good news to find the bad.
 	switch a.Kind {
-	case KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
+	case KindRecovered, KindWarningCleared, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
 		log.Info(a.Summary(), attrs...)
 	default:
 		log.Warn(a.Summary(), attrs...)
@@ -388,7 +401,7 @@ func buildChatAttachment(a Alert, fallback string) chatAttachment {
 		attachment.Text = a.Verdict.Reason
 		attachment.Fields = append(attachment.Fields,
 			chatField{Title: "Target", Value: a.Target, Short: true},
-			chatField{Title: "Evidence", Value: fmt.Sprintf("%d down · %d up · %d unknown", a.Verdict.Down, a.Verdict.Up, a.Verdict.Unknown), Short: true},
+			chatField{Title: "Evidence", Value: evidenceSummary(a.Verdict), Short: true},
 		)
 		if len(a.Verdict.Providers) > 0 {
 			attachment.Fields = append(attachment.Fields, chatField{Title: "Providers", Value: strings.Join(a.Verdict.Providers, ", "), Short: true})
@@ -417,8 +430,10 @@ func buildChatAttachment(a Alert, fallback string) chatAttachment {
 
 func alertColor(kind Kind) string {
 	switch kind {
-	case KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
+	case KindRecovered, KindWarningCleared, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
 		return "#2ECC71"
+	case KindWarning:
+		return "#F7BD55"
 	default:
 		return "#D24B4E"
 	}

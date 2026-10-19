@@ -84,6 +84,9 @@ func TestRollAny(t *testing.T) {
 		// But nothing may read as up while a member is unaccounted for.
 		{"undecided blocks up", map[string]Status{"a": StatusUp, "b": StatusUp}, StatusUnknown},
 		{"nothing reported", map[string]Status{}, StatusUnknown},
+		{"one warning", map[string]Status{"a": StatusUp, "b": StatusWarning, "c": StatusUp}, StatusWarning},
+		{"down beats warning", map[string]Status{"a": StatusWarning, "b": StatusDown, "c": StatusUp}, StatusDown},
+		{"undecided blocks warning", map[string]Status{"a": StatusWarning, "b": StatusUp}, StatusUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

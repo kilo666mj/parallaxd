@@ -87,7 +87,7 @@ func (c *Coordinator) recordIncident(a Alert, maintenance string, silenceID uint
 	defer c.mu.Unlock()
 	subject := a.Subject()
 	switch a.Kind {
-	case KindRecovered, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
+	case KindRecovered, KindWarningCleared, KindReporting, KindRejoined, KindWatched, KindWatchRecovered:
 		for i := len(c.incidents) - 1; i >= 0; i-- {
 			if c.incidents[i].Subject == subject && c.incidents[i].Active {
 				c.incidents[i].Active = false

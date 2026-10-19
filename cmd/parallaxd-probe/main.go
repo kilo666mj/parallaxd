@@ -114,6 +114,7 @@ type checkConfig struct {
 	CAFile           string            `json:"ca_file,omitempty"`
 	ProxyProfile     string            `json:"proxy_profile,omitempty"`
 	TLSExpiryWarning duration          `json:"tls_expiry_warning,omitempty"`
+	LatencyWarning   duration          `json:"latency_warning,omitempty"`
 
 	// Prober is accepted and ignored here: the coordinator uses it to know who
 	// runs what, and a prober templated its own checks does not need telling
@@ -132,6 +133,7 @@ func (c checkConfig) toCheck() check.Check {
 		DNSServer: c.DNSServer, DNSRCode: c.DNSRCode, GRPCService: c.GRPCService, GRPCTLS: c.GRPCTLS,
 		CAFile: c.CAFile, ProxyProfile: c.ProxyProfile,
 		TLSExpiryWarning: time.Duration(c.TLSExpiryWarning),
+		LatencyWarning:   time.Duration(c.LatencyWarning),
 	}
 }
 

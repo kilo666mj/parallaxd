@@ -31,6 +31,28 @@ appearing independent.
 5. The watcher evaluates a separately signed heartbeat so coordinator loss is
    visible even when the coordinator cannot alert for itself.
 
+### Warnings
+
+A probe that succeeds but crosses an advisory threshold reports `warning`:
+a TLS certificate within `tls_expiry_warning` of expiry, or any successful
+probe slower than the monitor's `latency_warning`. A warning is evidence the
+target answered, so:
+
+- it never counts toward a `down` quorum, and counts as answered when
+  confirming a recovery;
+- a new warning is corroborated and needs the check's quorum, like a failure;
+  without quorum the verdict is `up` with the warning probers as dissent;
+- once decided, the assigned prober's repeated warnings keep it without
+  further fan-out, and an `up` report is corroborated before it clears it;
+- a component with a warning member and no failing member is `warning`;
+- history counts warnings as available.
+
+Transitions alert as `warning` and `warning-cleared` (an outage that ends in a
+warning alerts as `recovered`). Tintwire cards use warning severity, and
+escalation policies ignore warnings unless their `kinds` list `warning`.
+Coordinators must be upgraded before probers, because an older coordinator
+treats a `warning` result as no evidence.
+
 Monitor catalogue changes use the authenticated dashboard, API, or MCP tools.
 They are versioned, audited, and replicated to the standby through the same
 coordinator implementation.

@@ -379,3 +379,27 @@ func TestSuppressedIsNotCountedAsDiscarded(t *testing.T) {
 		t.Errorf("suppressed = %d, want 1", v.Suppressed)
 	}
 }
+
+func TestWarningNeedsQuorumAndNeverCountsAsDown(t *testing.T) {
+	w, u, d := check.StatusWarning, check.StatusUp, check.StatusDown
+	v := Evaluate(testCheck(), []check.Result{
+		result("a", w, "hetzner"), result("b", w, "contabo"), result("c", w, "netcup"), result("d", u, "racknerd"),
+	}, opts())
+	if v.Status != w || v.Warning != 3 || v.IndependentUp != 4 || len(v.Dissent) != 1 {
+		t.Fatalf("warning quorum: %+v", v)
+	}
+
+	v = Evaluate(testCheck(), []check.Result{
+		result("a", w, "hetzner"), result("b", u, "contabo"), result("c", u, "netcup"),
+	}, opts())
+	if v.Status != u || !strings.Contains(v.Reason, "1 warning short of quorum 3") || v.Dissent[0] != "a" {
+		t.Fatalf("minority warning: %+v", v)
+	}
+
+	v = Evaluate(testCheck(), []check.Result{
+		result("a", d, "hetzner"), result("b", d, "contabo"), result("c", w, "netcup"), result("d", w, "racknerd"),
+	}, opts())
+	if v.Status != check.StatusUnknown || v.Counted != 4 {
+		t.Fatalf("warnings must not complete a down quorum or hide a minority down: %+v", v)
+	}
+}

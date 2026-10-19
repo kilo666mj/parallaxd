@@ -40,7 +40,10 @@ all the time.
 
 The design relies on a few rules:
 
-- Results are `up`, `down`, or `unknown`; `unknown` never counts as a vote.
+- Results are `up`, `warning`, `down`, or `unknown`; `unknown` never counts as
+  a vote. A `warning` (certificate near expiry, response slower than
+  `latency_warning`) means the target works; it needs the same quorum as
+  `down`, never counts toward an outage, and alerts with lower urgency.
 - Every check declares a `public` or `internal` vantage.
 - Each prober votes once, and optional provider diversity prevents several
   hosts at one provider from masquerading as independent evidence.

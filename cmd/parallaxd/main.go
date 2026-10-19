@@ -211,6 +211,7 @@ type checkConfig struct {
 	CAFile           string            `json:"ca_file,omitempty"`
 	ProxyProfile     string            `json:"proxy_profile,omitempty"`
 	TLSExpiryWarning duration          `json:"tls_expiry_warning,omitempty"`
+	LatencyWarning   duration          `json:"latency_warning,omitempty"`
 
 	// Prober is the preferred owner. Empty uses rendezvous hashing; dynamic
 	// assignment temporarily moves checks away from unavailable owners.
@@ -231,6 +232,7 @@ func (c checkConfig) toCheck() check.Check {
 		DNSServer: c.DNSServer, DNSRCode: c.DNSRCode, GRPCService: c.GRPCService, GRPCTLS: c.GRPCTLS,
 		CAFile: c.CAFile, ProxyProfile: c.ProxyProfile,
 		TLSExpiryWarning: time.Duration(c.TLSExpiryWarning),
+		LatencyWarning:   time.Duration(c.LatencyWarning),
 	}
 }
 

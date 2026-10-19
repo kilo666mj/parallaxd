@@ -81,6 +81,11 @@ func Run(ctx context.Context, p Prober, c check.Check, prober, provider string) 
 	defer cancel()
 
 	status, latency, detail := p.Probe(ctx, c)
+	if status == check.StatusUp && c.LatencyWarning > 0 && latency > c.LatencyWarning {
+		status = check.StatusWarning
+		detail = strings.TrimPrefix(fmt.Sprintf("%s; latency %s exceeds warning threshold %s",
+			detail, latency.Round(time.Millisecond), c.LatencyWarning), "; ")
+	}
 	r.Status, r.Latency, r.Detail = status, latency, detail
 	return r
 }

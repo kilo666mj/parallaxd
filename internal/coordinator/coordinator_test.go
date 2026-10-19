@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -137,6 +138,13 @@ func (tt *toggleTarget) down() {
 // providers assigns each prober a provider name; nil means all distinct.
 func newHarness(t *testing.T, n int, q check.Quorum, providers []string) *harness {
 	t.Helper()
+	return newHarnessWith(t, n, q, providers, nil)
+}
+
+// newHarnessWith is newHarness with a hook to adjust the check before the
+// coordinator is built.
+func newHarnessWith(t *testing.T, n int, q check.Quorum, providers []string, adjust func(*check.Check)) *harness {
+	t.Helper()
 
 	coordPub, coordPriv, err := wire.GenerateKey()
 	if err != nil {
@@ -151,6 +159,9 @@ func newHarness(t *testing.T, n int, q check.Quorum, providers []string) *harnes
 		Vantage:  check.VantageInternal,
 		Interval: time.Minute, Timeout: 2 * time.Second,
 		Quorum: q,
+	}
+	if adjust != nil {
+		adjust(&chk)
 	}
 
 	h := &harness{t: t, probers: map[string]*testProber{}, notifier: &fakeNotifier{},
@@ -982,5 +993,61 @@ func TestEligibleProberPoolIsValidatedAgainstFleet(t *testing.T) {
 	if _, err := New(Config{Name: "coordinator", Key: h.coord.cfg.Key, Peers: h.coord.peers,
 		Checks: []check.Check{chk}, Logger: discardLogger()}); err == nil || !strings.Contains(err.Error(), "asks 3 probers") {
 		t.Fatalf("undersized eligible pool error = %v", err)
+	}
+}
+
+// Every corroborator sees a 1ns latency threshold crossed, so they all warn.
+func slowCheck(c *check.Check) { c.LatencyWarning = time.Nanosecond }
+
+func TestWarningIsCorroboratedOnceAndHeldWithoutFanOut(t *testing.T) {
+	h := newHarnessWith(t, 3, check.Quorum{Agree: 2, Of: 3}, nil, slowCheck)
+	v, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusWarning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != check.StatusWarning {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if alerts := h.notifier.all(); len(alerts) != 1 || alerts[0].Kind != KindWarning {
+		t.Fatalf("alerts = %+v", alerts)
+	}
+	asked := h.probers["probe-b"].asked.Load() + h.probers["probe-c"].asked.Load()
+	if asked == 0 {
+		t.Fatal("a lone warning was not corroborated")
+	}
+	for range 3 {
+		if v, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusWarning)); err != nil || v.Status != check.StatusWarning {
+			t.Fatalf("held warning: %+v %v", v, err)
+		}
+	}
+	if again := h.probers["probe-b"].asked.Load() + h.probers["probe-c"].asked.Load(); again != asked {
+		t.Fatalf("a decided warning fanned out again: %d -> %d", asked, again)
+	}
+	// One prober saying up does not clear a warning the others still see.
+	if v, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", check.StatusUp)); err != nil || v.Status != check.StatusWarning {
+		t.Fatalf("lone up cleared the warning: %+v %v", v, err)
+	}
+	if got := h.notifier.count(); got != 1 {
+		t.Fatalf("got %d alerts, want only the first warning", got)
+	}
+	if got := h.coord.Status()[0].Status; got != string(check.StatusWarning) {
+		t.Fatalf("status = %q", got)
+	}
+}
+
+func TestWarningClearsAndOutageEndsIntoWarning(t *testing.T) {
+	h := newHarness(t, 1, check.Quorum{Agree: 1, Of: 1}, nil)
+	for _, status := range []check.Status{check.StatusWarning, check.StatusUp, check.StatusDown, check.StatusWarning, check.StatusDown} {
+		if _, err := h.coord.Process(t.Context(), h.reportFrom("probe-a", status)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var kinds []Kind
+	for _, a := range h.notifier.all() {
+		kinds = append(kinds, a.Kind)
+	}
+	want := []Kind{KindWarning, KindWarningCleared, KindDown, KindRecovered, KindDown}
+	if fmt.Sprint(kinds) != fmt.Sprint(want) {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
 	}
 }
