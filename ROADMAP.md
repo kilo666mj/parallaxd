@@ -51,13 +51,14 @@ Implemented and verified:
 
 The [standby rebuild helper](ansible/ha-rebuild.yml) prepares a validated
 candidate and provides an explicitly gated archive/reconfigure/resync workflow.
-Its execution path still needs a disposable rehearsal or the next announced HA
-exercise; it has not been exercised against the live primary.
+Its execution and failure paths were rehearsed on a live standby (see the
+[rehearsal record](docs/ha-rebuild-example.md)); the rehearsal lengthened its
+replication verification to cover the first full history sync. It has not been
+run against a former primary after a real promotion.
 
 ## Remaining work
 
-- Rehearse the new rebuild helper, including its failure path, and record the
-  result. Provider/network fencing and service-entry-point movement stay
+- Provider/network fencing and service-entry-point movement stay
   operator-controlled; neither is triggered by loss of contact.
 - Address findings from the weekly audit; unavailable private inventory or
   retention evidence must be reported as verification gaps. Assurance-job and

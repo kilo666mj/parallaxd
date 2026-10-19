@@ -175,8 +175,11 @@
               - --report
               - /var/lib/parallaxd-operations/coordinator.json
           register: rebuild_verified
-          retries: 12
-          delay: 5
+          # The first sync of an empty standby copies all retained history and
+          # reports the time that took as lag; only the next sync shows the real
+          # lag. On a small host that first sync took over two minutes.
+          retries: 60
+          delay: 10
           until: rebuild_verified.rc == 0
           changed_when: false
 
