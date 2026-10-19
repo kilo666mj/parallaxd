@@ -64,6 +64,7 @@ The design relies on a few rules:
 | `parallaxd-watch` | Alerts when the coordinator's signed heartbeat stops |
 | `parallaxd-ha` | Preflights and explicitly promotes a fenced warm standby |
 | `parallaxd-network` | Creates and installs the WireGuard control overlay |
+| `parallaxd-status` | Renders a static public [status page](docs/status-page.md) from the signed export |
 
 The coordinator also serves an operator dashboard, authenticated monitor and
 incident APIs, a Streamable HTTP MCP endpoint at `/mcp`, a redacted public
