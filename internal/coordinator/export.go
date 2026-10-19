@@ -57,6 +57,9 @@ type Export struct {
 	// Partitioned means several probers are cut off at once, which is the
 	// fleet splitting rather than a host dropping out.
 	Partitioned bool `json:"partitioned,omitempty"`
+
+	// Uptime covers the last 30 days for every check and component.
+	Uptime []Uptime `json:"uptime"`
 }
 
 // Export builds the published document.
@@ -78,6 +81,7 @@ func (c *Coordinator) Export() Export {
 		Probers:     len(c.peers),
 		Isolated:    m.Isolated,
 		Partitioned: m.Partitioned,
+		Uptime:      c.UptimeReport(c.now().UTC().Add(-defaultUptimePeriod), c.now().UTC()),
 	}
 }
 

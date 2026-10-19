@@ -58,7 +58,7 @@ func TestServerPublishesExpectedToolsAndReadsStatus(t *testing.T) {
 	for _, tool := range listed.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"parallaxd_get_status", "parallaxd_list_monitors", "parallaxd_get_monitor_options", "parallaxd_create_monitor", "parallaxd_delete_monitor", "parallaxd_rollback_monitors", "parallaxd_get_history", "parallaxd_list_maintenance", "parallaxd_create_maintenance", "parallaxd_update_maintenance", "parallaxd_delete_maintenance"} {
+	for _, want := range []string{"parallaxd_get_status", "parallaxd_list_monitors", "parallaxd_get_monitor_options", "parallaxd_create_monitor", "parallaxd_delete_monitor", "parallaxd_rollback_monitors", "parallaxd_get_history", "parallaxd_list_maintenance", "parallaxd_create_maintenance", "parallaxd_update_maintenance", "parallaxd_delete_maintenance", "parallaxd_get_uptime"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("missing tool %q in %v", want, names)
 		}

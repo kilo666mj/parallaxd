@@ -32,6 +32,7 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/deliveries", c.viewOnly(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, c.Outbox()) }))
 	mux.HandleFunc("GET /v1/history", c.viewOnly(c.handleHistory))
 	mux.HandleFunc("GET /v1/history/summary", c.viewOnly(c.handleHistorySummary))
+	mux.HandleFunc("GET /v1/uptime", c.viewOnly(c.handleUptime))
 	mux.HandleFunc("GET /v1/metrics/hosts", c.viewOnly(c.handleHostMetrics))
 	mux.HandleFunc("GET /metrics", c.viewOnly(c.handleMetrics))
 	mux.HandleFunc("GET /v1/auth/me", c.handleAuthMe)

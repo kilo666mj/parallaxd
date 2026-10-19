@@ -17,7 +17,7 @@ independently.
 
 | Role | MCP capabilities |
 |---|---|
-| `viewer` | Read status, monitors, incidents, components, diagnostics, history, monitor options, maintenance windows, and catalogue revisions |
+| `viewer` | Read status, monitors, incidents, components, diagnostics, history, monitor options, maintenance windows, uptime, and catalogue revisions |
 | `operator` | All viewer tools plus validate, test, create, update, and delete monitors and maintenance windows |
 | `admin` | All operator tools plus catalogue rollback |
 

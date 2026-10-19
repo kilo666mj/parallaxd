@@ -171,6 +171,25 @@ notifications: no active coordinator or two at once, failing replication, an
 undelivered alert backlog, a saturated result queue, journal write failures,
 and corroboration that keeps ending inconclusive. Check it with
 `promtool check rules` after editing.
+
+## Uptime
+
+`GET /v1/uptime` (viewer role) reports, for every check and component, the
+share of a period spent outside a corroborated outage. The default period is
+the last 30 days; pass `since` and `until` (RFC 3339) for another one, for
+example a calendar month. The MCP tool `parallaxd_get_uptime` takes the same
+parameters, the status export includes the last 30 days, and the dashboard's
+History view shows it beside each check.
+
+Uptime comes from durable `down` incidents, not from observation history,
+which keeps at most `history_max_per_check` results and so may not reach back a
+month. Only quorum-decided outages count: inconclusive or stale periods are
+not downtime. Outage time that falls inside a matching maintenance window,
+including each occurrence of a recurring one, is excluded from downtime and
+reported as `maintenance_seconds`. A deleted maintenance window no longer
+excludes anything. A check added part-way through the period is measured over
+the whole period.
+
 ## Maintenance windows
 
 During a maintenance window, matching alerts are recorded as suppressed
