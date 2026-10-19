@@ -60,6 +60,20 @@ previous page in place, so the reader-side staleness warning takes over.
   name. Names missing from the export are shown as Unknown and reported on
   stderr.
 
+## Ansible
+
+[`ansible/status-page.yml`](../ansible/status-page.yml) installs the renderer
+and a one-minute timer on the hosts in the `parallaxd_status_page` group. Set
+`parallaxd_status_binary` (a local `parallaxd-status` build for the host's
+architecture) and `parallaxd_status_config` (the configuration above without
+`output_dir`) in your inventory. To publish to object storage, also set
+`parallaxd_status_upload` with `url` (the object URL, for example
+`https://<account>.r2.cloudflarestorage.com/<bucket>/index.html`),
+`access_key_id` and `secret_access_key`. After each render, curl uploads the
+page with an S3 signature and a 30-second `Cache-Control`. The credentials reach
+curl through a systemd credential, not the command line. For Cloudflare R2, the
+secret access key is the SHA-256 hex digest of the API token value.
+
 ## Running on a timer
 
 ```ini

@@ -1,0 +1,134 @@
+---
+# Install the static status page renderer (cmd/parallaxd-status) with a
+# one-minute timer on the hosts in parallaxd_status_page. It only reads the
+# coordinator's signed export. See docs/status-page.md.
+#
+# Required variables (set them in the inventory):
+#   parallaxd_status_binary: local path to a parallaxd-status build for the host
+#   parallaxd_status_config: the renderer configuration without output_dir
+# Optional:
+#   parallaxd_status_upload: {url, access_key_id, secret_access_key} to PUT
+#     index.html to an S3-compatible object URL after each render
+- name: Install the parallaxd status page renderer
+  hosts: parallaxd_status_page
+  become: true
+  gather_facts: false
+  vars:
+    status_output_dir: /var/lib/parallaxd-status
+    status_upload_enabled: "{{ parallaxd_status_upload is defined }}"
+  tasks:
+    - name: Read the host architecture
+      ansible.builtin.setup:
+        gather_subset: [platform]
+        filter: [ansible_architecture]
+
+    # parallaxd_status_binary may use this, e.g. dist/parallaxd-status-linux-{{ parallaxd_goarch }}.
+    - name: Resolve the binary architecture
+      ansible.builtin.set_fact:
+        parallaxd_goarch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_architecture, ansible_architecture) }}"
+
+    - name: Require the renderer binary and configuration
+      ansible.builtin.assert:
+        that:
+          - parallaxd_status_binary is defined
+          - parallaxd_status_config is mapping
+          - parallaxd_status_upload is not defined or (parallaxd_status_upload.url is defined and parallaxd_status_upload.access_key_id is defined and parallaxd_status_upload.secret_access_key is defined)
+        fail_msg: Set parallaxd_status_binary and parallaxd_status_config; parallaxd_status_upload needs url, access_key_id and secret_access_key.
+
+    - name: Install the renderer
+      ansible.builtin.copy:
+        src: "{{ parallaxd_status_binary }}"
+        dest: /usr/local/bin/parallaxd-status
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the renderer configuration
+      ansible.builtin.copy:
+        content: "{{ parallaxd_status_config | combine({'output_dir': status_output_dir}) | to_nice_json }}\n"
+        dest: /etc/parallaxd/status.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Read by curl through a systemd credential so the secret never appears on
+    # a command line.
+    - name: Install the upload credentials
+      ansible.builtin.copy:
+        content: |
+          url = "{{ parallaxd_status_upload.url }}"
+          user = "{{ parallaxd_status_upload.access_key_id }}:{{ parallaxd_status_upload.secret_access_key }}"
+        dest: /etc/parallaxd/status-upload.curl
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      when: status_upload_enabled | bool
+
+    - name: Install the renderer service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/parallaxd-status.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Render the parallaxd status page
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          DynamicUser=yes
+          StateDirectory=parallaxd-status
+          StateDirectoryMode=0755
+          ExecStart=/usr/local/bin/parallaxd-status -config /etc/parallaxd/status.json
+          {% if status_upload_enabled | bool %}
+          LoadCredential=upload:/etc/parallaxd/status-upload.curl
+          # Edge caches serve the object; keep their copy short-lived.
+          ExecStartPost=/bin/sh -c 'exec /usr/bin/curl --fail --silent --show-error --max-time 30 --aws-sigv4 aws:amz:auto:s3 -K "$$CREDENTIALS_DIRECTORY/upload" -H "Content-Type: text/html; charset=utf-8" -H "Cache-Control: max-age=30" -T {{ status_output_dir }}/index.html'
+          {% endif %}
+          NoNewPrivileges=yes
+          ProtectSystem=strict
+          ProtectHome=yes
+          PrivateTmp=yes
+      notify: Reload systemd
+
+    - name: Install the renderer timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/parallaxd-status.timer
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Render the parallaxd status page every minute
+
+          [Timer]
+          OnBootSec=1min
+          OnUnitActiveSec=1min
+          AccuracySec=5s
+
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Apply unit changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Render once now
+      ansible.builtin.systemd_service:
+        name: parallaxd-status.service
+        state: started
+      changed_when: false
+
+    - name: Enable the timer
+      ansible.builtin.systemd_service:
+        name: parallaxd-status.timer
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
