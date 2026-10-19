@@ -103,6 +103,11 @@ func maintenanceBody(client Client, input maintenanceInput) any {
 	}{input, client.Actor}
 }
 
+type uptimeInput struct {
+	Since string `json:"since,omitempty" jsonschema:"optional RFC3339 start; defaults to 30 days ago"`
+	Until string `json:"until,omitempty" jsonschema:"optional RFC3339 end; defaults to now"`
+}
+
 func New(client Client, version string) *mcp.Server {
 	server := mcpkit.MustServer(mcpkit.ServerConfig{Name: "parallaxd", Version: version,
 		Instructions: "Use Parallaxd tools to inspect corroborated availability and manage the live monitor catalogue. Validate and test monitors before saving changes."})
@@ -132,6 +137,22 @@ func New(client Client, version string) *mcp.Server {
 				values.Set("limit", strconv.Itoa(input.Limit))
 			}
 			path := "/v1/history"
+			if query := values.Encode(); query != "" {
+				path += "?" + query
+			}
+			return fetch(ctx, client, path)
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_get_uptime", Description: "Read uptime per monitor and component over a period (default the last 30 days), from corroborated outages with maintenance time excluded.", Annotations: mcpkit.ReadOnly(false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input uptimeInput) (*mcp.CallToolResult, document, error) {
+			values := url.Values{}
+			if input.Since != "" {
+				values.Set("since", input.Since)
+			}
+			if input.Until != "" {
+				values.Set("until", input.Until)
+			}
+			path := "/v1/uptime"
 			if query := values.Encode(); query != "" {
 				path += "?" + query
 			}
