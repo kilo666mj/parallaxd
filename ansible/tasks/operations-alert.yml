@@ -1,0 +1,62 @@
+---
+# Wires OnFailure=/OnSuccess= hooks on assurance units to Tintwire. The alerter
+# is the separately installed verifier binary, so no coordinator restarts.
+- name: Validate assurance alert destination
+  ansible.builtin.assert:
+    that:
+      - parallaxd_verify_binary is defined
+      - >-
+        parallaxd_notification_destinations
+        | selectattr('name', 'equalto', parallaxd_assurance_alert_destination)
+        | selectattr('driver', 'defined') | selectattr('driver', 'equalto', 'tintwire') | list | length == 1
+    fail_msg: >-
+      parallaxd_assurance_alert_destination must name one Tintwire entry in
+      parallaxd_notification_destinations, and parallaxd_verify_binary must be set.
+
+- name: Create configuration directory
+  ansible.builtin.file:
+    path: /etc/parallaxd
+    state: directory
+
+- name: Create alert state directory
+  ansible.builtin.file:
+    path: /var/lib/parallaxd-operations/alerts
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install alerter without replacing the running coordinator
+  ansible.builtin.copy:
+    src: "{{ parallaxd_verify_binary }}"
+    dest: /usr/local/libexec/parallaxd/parallaxd-verify
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install assurance alert configuration
+  ansible.builtin.template:
+    src: assurance-alert.json.j2
+    dest: /etc/parallaxd/assurance-alert.json
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+
+- name: Install assurance alert hook units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/parallaxd-assurance-{{ item }}@.service"
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Report Parallaxd assurance {{ item }} of %i
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/libexec/parallaxd/parallaxd-verify -assurance-alert %i -assurance-result {{ 'failure' if item == 'failed' else 'success' }}
+      TimeoutStartSec=90
+      UMask=0077
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ReadWritePaths=/var/lib/parallaxd-operations
+  loop: [failed, ok]

@@ -259,6 +259,9 @@ func main() {
 		showVer    = flag.Bool("version", false, "print version and exit")
 		validate   = flag.Bool("validate", false, "validate config and exit")
 		backupRoot = flag.String("verify-backup", "", "verify a backup filesystem root using disposable copies, then exit")
+		alertUnit  = flag.String("assurance-alert", "", "publish a Tintwire card for this systemd assurance unit, then exit")
+		alertState = flag.String("assurance-result", "failure", "with -assurance-alert: failure or success")
+		alertCfg   = flag.String("assurance-alert-config", "/etc/parallaxd/assurance-alert.json", "with -assurance-alert: notification config")
 	)
 	flag.Parse()
 
@@ -285,6 +288,16 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(log)
+	if *alertUnit != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := runAssuranceAlert(ctx, *alertCfg, *alertUnit, *alertState); err != nil {
+			log.Error("assurance alert failed", "unit", *alertUnit, "err", err)
+			cancel()
+			os.Exit(1)
+		}
+		return
+	}
 	if *backupRoot != "" {
 		if err := verifyBackup(*backupRoot, *configPath, log); err != nil {
 			log.Error("backup verification failed", "err", err)

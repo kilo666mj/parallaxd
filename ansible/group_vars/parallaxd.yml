@@ -185,6 +185,13 @@ parallaxd_webhook_icon_emoji: ""
 # route `warning` and `warning-cleared` to a quieter destination if wanted.
 parallaxd_notification_destinations: "{{ parallaxd_notification_destinations_config | default([]) }}"
 parallaxd_notification_routes: []
+# Name of a Tintwire entry in parallaxd_notification_destinations. When set,
+# operations.yml makes failed assurance and backup-verification units publish
+# a card (and a resolved card on their next success). Needs
+# parallaxd_verify_binary on every assurance host; see docs/operations.md.
+# Set parallaxd_assurance_alert_destination_name in group_vars/all.yml or as
+# an extra var, for the same precedence reason as parallaxd_webhook_url.
+parallaxd_assurance_alert_destination: "{{ parallaxd_assurance_alert_destination_name | default('') }}"
 parallaxd_escalations: []
 parallaxd_notification_retry_initial: 15s
 parallaxd_notification_retry_max: 15m
