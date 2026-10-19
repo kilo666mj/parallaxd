@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tintwire "go.michaelspost.com/tintwire-go"
 )
@@ -121,11 +122,15 @@ func journalTail(unit string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// truncate keeps the last bytes of s within Tintwire's byte limit: the last
+// journal lines usually say why the unit failed.
 func truncate(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
+	if len(s) <= max {
 		return s
 	}
-	// Keep the end: the last lines usually say why it failed.
-	return "…" + string(r[len(r)-max+1:])
+	s = s[len(s)-(max-len("…")):]
+	for len(s) > 0 && !utf8.RuneStart(s[0]) {
+		s = s[1:]
+	}
+	return "…" + s
 }

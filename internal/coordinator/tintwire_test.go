@@ -121,3 +121,10 @@ func TestWarningIsLessUrgentThanDown(t *testing.T) {
 		t.Fatalf("down severity = %q", got)
 	}
 }
+
+func TestTintwireTruncationCountsBytes(t *testing.T) {
+	got := truncateRunes(strings.Repeat("é", 300), 500)
+	if len(got) > 500 || !utf8.ValidString(got) || !strings.HasSuffix(got, "…") {
+		t.Fatalf("truncated to %d bytes: %q", len(got), got)
+	}
+}
