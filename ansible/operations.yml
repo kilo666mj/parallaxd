@@ -37,7 +37,7 @@
 
     - name: Install assurance alerts
       ansible.builtin.include_tasks: tasks/operations-alert.yml
-      when: parallaxd_assurance_alert_destination | default('')
+      when: parallaxd_assurance_alert_destination | default('') | length > 0
 
     - name: Install checks for this host's roles
       ansible.builtin.include_tasks: tasks/operations-check.yml
@@ -95,7 +95,7 @@
 
     - name: Install assurance alerts
       ansible.builtin.include_tasks: tasks/operations-alert.yml
-      when: parallaxd_assurance_alert_destination | default('')
+      when: parallaxd_assurance_alert_destination | default('') | length > 0
 
     - name: Install backup verification units
       ansible.builtin.include_tasks: tasks/operations-backup.yml
