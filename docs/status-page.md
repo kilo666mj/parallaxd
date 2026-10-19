@@ -83,7 +83,7 @@ Description=Render the parallaxd status page
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/parallaxd-status -config /etc/parallaxd/status.json
+ExecStart=/usr/local/bin/parallaxd-status -config /etc/parallaxd-status/status.json
 # A user that owns /var/www/status; the web server only needs to read it.
 User=parallaxd-status
 

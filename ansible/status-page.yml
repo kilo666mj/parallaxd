@@ -43,10 +43,20 @@
         group: root
         mode: '0755'
 
+    # Not /etc/parallaxd: that directory belongs to the coordinator and the
+    # renderer runs as an unprivileged dynamic user.
+    - name: Create the renderer configuration directory
+      ansible.builtin.file:
+        path: /etc/parallaxd-status
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Install the renderer configuration
       ansible.builtin.copy:
         content: "{{ parallaxd_status_config | combine({'output_dir': status_output_dir}) | to_nice_json }}\n"
-        dest: /etc/parallaxd/status.json
+        dest: /etc/parallaxd-status/status.json
         owner: root
         group: root
         mode: '0644'
@@ -58,7 +68,7 @@
         content: |
           url = "{{ parallaxd_status_upload.url }}"
           user = "{{ parallaxd_status_upload.access_key_id }}:{{ parallaxd_status_upload.secret_access_key }}"
-        dest: /etc/parallaxd/status-upload.curl
+        dest: /etc/parallaxd-status/upload.curl
         owner: root
         group: root
         mode: '0600'
@@ -82,9 +92,9 @@
           DynamicUser=yes
           StateDirectory=parallaxd-status
           StateDirectoryMode=0755
-          ExecStart=/usr/local/bin/parallaxd-status -config /etc/parallaxd/status.json
+          ExecStart=/usr/local/bin/parallaxd-status -config /etc/parallaxd-status/status.json
           {% if status_upload_enabled | bool %}
-          LoadCredential=upload:/etc/parallaxd/status-upload.curl
+          LoadCredential=upload:/etc/parallaxd-status/upload.curl
           # Edge caches serve the object; keep their copy short-lived.
           ExecStartPost=/bin/sh -c 'exec /usr/bin/curl --fail --silent --show-error --max-time 30 --aws-sigv4 aws:amz:auto:s3 -K "$$CREDENTIALS_DIRECTORY/upload" -H "Content-Type: text/html; charset=utf-8" -H "Cache-Control: max-age=30" -T {{ status_output_dir }}/index.html'
           {% endif %}

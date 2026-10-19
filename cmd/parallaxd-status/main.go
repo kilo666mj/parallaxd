@@ -382,7 +382,7 @@ func run(configPath string, now time.Time) error {
 }
 
 func main() {
-	configPath := flag.String("config", "/etc/parallaxd/status.json", "status page configuration")
+	configPath := flag.String("config", "/etc/parallaxd-status/status.json", "status page configuration")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
