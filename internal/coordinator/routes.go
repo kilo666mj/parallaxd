@@ -33,6 +33,7 @@ func (c *Coordinator) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/history", c.viewOnly(c.handleHistory))
 	mux.HandleFunc("GET /v1/history/summary", c.viewOnly(c.handleHistorySummary))
 	mux.HandleFunc("GET /v1/metrics/hosts", c.viewOnly(c.handleHostMetrics))
+	mux.HandleFunc("GET /metrics", c.viewOnly(c.handleMetrics))
 	mux.HandleFunc("GET /v1/auth/me", c.handleAuthMe)
 	mux.HandleFunc("POST /v1/auth/login", c.handleLogin)
 	mux.HandleFunc("POST /v1/auth/logout", c.handleLogout)

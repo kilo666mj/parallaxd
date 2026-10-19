@@ -67,7 +67,8 @@ The design relies on a few rules:
 
 The coordinator also serves an operator dashboard, authenticated monitor and
 incident APIs, a Streamable HTTP MCP endpoint at `/mcp`, a redacted public
-status export, observation history, and HA diagnostics. Alert delivery supports
+status export, observation history, HA diagnostics, and Prometheus
+[self-metrics](docs/operations.md#coordinator-metrics) at `/metrics`. Alert delivery supports
 the always-on log, durable generic webhooks, and native Tintwire cards with a
 generic-webhook fallback (for example, Mattermost) when Tintwire has a
 retryable delivery failure.

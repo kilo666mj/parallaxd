@@ -218,6 +218,11 @@ type Coordinator struct {
 	// starts, which is how a useful signal becomes one people mute.
 	startedAt time.Time
 
+	// Corroboration counters for /metrics, for this process lifetime.
+	corroborations             atomic.Uint64
+	inconclusiveCorroborations atomic.Uint64
+	corroborationNanos         atomic.Int64
+
 	mu                  sync.Mutex
 	states              map[string]*entityState
 	componentStates     map[string]*entityState
@@ -740,6 +745,13 @@ func (c *Coordinator) decide(ctx context.Context, chk check.Check, r check.Resul
 	// silence is out of date. Cleared here rather than waiting for the next
 	// watch tick, so a returning prober is visible immediately.
 	st.stale = false
+	if !corroborationStarted.IsZero() {
+		c.corroborations.Add(1)
+		c.corroborationNanos.Add(int64(time.Since(corroborationStarted)))
+		if v.Status == check.StatusUnknown {
+			c.inconclusiveCorroborations.Add(1)
+		}
+	}
 
 	if r.Status == check.StatusDown {
 		if st.suspectedSince.IsZero() {
