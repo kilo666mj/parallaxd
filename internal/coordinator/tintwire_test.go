@@ -87,6 +87,7 @@ func TestTintwireLifecyclePairsProblemsWithRecoveries(t *testing.T) {
 		{Alert{Prober: "p1", Kind: KindIsolated}, Alert{Prober: "p1", Kind: KindRejoined}},
 		{Alert{Kind: KindUnwatched}, Alert{Kind: KindWatched}},
 		{Alert{Kind: KindWatchLost}, Alert{Kind: KindWatchRecovered}},
+		{Alert{Check: "website", Kind: KindWarning}, Alert{Check: "website", Kind: KindWarningCleared}},
 	}
 	seen := map[string]bool{}
 	for _, pair := range pairs {
@@ -109,5 +110,14 @@ func TestTintwireLifecyclePairsProblemsWithRecoveries(t *testing.T) {
 	card := tintwireCard(Alert{Check: "website", Kind: KindDown}, "", "")
 	if card.State != tintwire.StateFiring || card.LifecycleKey == "" || card.Validate() != nil {
 		t.Fatalf("card lifecycle = %q/%q", card.State, card.LifecycleKey)
+	}
+}
+
+func TestWarningIsLessUrgentThanDown(t *testing.T) {
+	if got := tintwireSeverity(KindWarning); got != tintwire.SeverityWarning {
+		t.Fatalf("warning severity = %q", got)
+	}
+	if got := tintwireSeverity(KindDown); got != tintwire.SeverityCritical {
+		t.Fatalf("down severity = %q", got)
 	}
 }

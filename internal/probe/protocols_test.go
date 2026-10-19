@@ -90,9 +90,14 @@ func TestTLSFixtureValidatesTrustNameAndPeerDetail(t *testing.T) {
 		t.Fatalf("valid TLS fixture: status=%s detail=%q", status, detail)
 	}
 	c.TLSExpiryWarning = 2 * time.Hour
-	if status, _, detail := (TLS{RootCAs: roots}).Probe(t.Context(), c); status != check.StatusDown || !strings.Contains(detail, "warning threshold 2h0m0s") {
+	if status, _, detail := (TLS{RootCAs: roots}).Probe(t.Context(), c); status != check.StatusWarning || !strings.Contains(detail, "warning threshold 2h0m0s") {
 		t.Fatalf("expiry warning: status=%s detail=%q", status, detail)
 	}
+	c.ExpectBody = "not-the-peer"
+	if status, _, detail := (TLS{RootCAs: roots}).Probe(t.Context(), c); status != check.StatusDown {
+		t.Fatalf("expiry warning hid an expect_body mismatch: status=%s detail=%q", status, detail)
+	}
+	c.ExpectBody = ""
 	c.TLSExpiryWarning = 0
 	c.ServerName = "wrong.example"
 	if status, _, detail := (TLS{RootCAs: roots}).Probe(t.Context(), c); status != check.StatusDown || !strings.Contains(detail, "certificate") {

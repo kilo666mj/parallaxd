@@ -54,6 +54,7 @@ type HistorySummary struct {
 	Samples          int        `json:"samples"`
 	Up               int        `json:"up"`
 	Down             int        `json:"down"`
+	Warning          int        `json:"warning,omitempty"`
 	Unknown          int        `json:"unknown"`
 	Suppressed       int        `json:"suppressed"`
 	Corroborations   int        `json:"corroborations"`
@@ -141,7 +142,7 @@ func (c *Coordinator) recordHistoryWrite(err error) {
 func (o *Observation) addProtocolMetadata() {
 	switch o.Kind {
 	case check.KindDNS:
-		if o.Status == check.StatusUp && o.Detail != "" {
+		if (o.Status == check.StatusUp || o.Status == check.StatusWarning) && o.Detail != "" {
 			o.DNSAnswers = strings.Split(o.Detail, "\n")
 		}
 	case check.KindTLS:
@@ -363,12 +364,14 @@ func (c *Coordinator) HistorySummaries() []HistorySummary {
 			switch verdict {
 			case check.StatusUp:
 				summary.Up++
+			case check.StatusWarning:
+				summary.Warning++
 			case check.StatusDown:
 				summary.Down++
 			default:
 				summary.Unknown++
 			}
-			if verdict == check.StatusUp && observation.Status == check.StatusUp && observation.LatencyMS >= 0 {
+			if answered(verdict) && answered(observation.Status) && observation.LatencyMS >= 0 {
 				latencies = append(latencies, observation.LatencyMS)
 			}
 			if !observation.TLSExpiresAt.IsZero() {
@@ -383,9 +386,10 @@ func (c *Coordinator) HistorySummaries() []HistorySummary {
 			summary.FirstObservedAt = considered[0].ReceivedAt
 			summary.LastObservedAt = considered[len(considered)-1].ReceivedAt
 		}
-		decided := summary.Up + summary.Down
+		// A warning is available: the target answered and behaved.
+		decided := summary.Up + summary.Warning + summary.Down
 		if decided > 0 {
-			summary.Availability = float64(summary.Up) / float64(decided)
+			summary.Availability = float64(summary.Up+summary.Warning) / float64(decided)
 		}
 		if len(latencies) > 0 {
 			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -434,4 +438,8 @@ func (c *Coordinator) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 func (c *Coordinator) handleHistorySummary(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, c.HistorySummaries())
+}
+
+func answered(status check.Status) bool {
+	return status == check.StatusUp || status == check.StatusWarning
 }

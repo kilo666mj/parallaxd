@@ -470,3 +470,32 @@ func TestBannerWithoutExpectationIsInvalid(t *testing.T) {
 		t.Errorf("status = %q, want unknown for an invalid check", r.Status)
 	}
 }
+
+type fixedProbe struct {
+	status  check.Status
+	latency time.Duration
+}
+
+func (fixedProbe) Kind() check.Kind { return check.KindHTTP }
+func (f fixedProbe) Probe(context.Context, check.Check) (check.Status, time.Duration, string) {
+	return f.status, f.latency, "HTTP 200"
+}
+
+func TestLatencyWarningOnlyDowngradesSlowUp(t *testing.T) {
+	c := httpCheck("http://example.test")
+	c.LatencyWarning = time.Second
+	if r := Run(t.Context(), fixedProbe{check.StatusUp, 1500 * time.Millisecond}, c, "probe-a", ""); r.Status != check.StatusWarning ||
+		!strings.Contains(r.Detail, "HTTP 200; latency 1.5s exceeds warning threshold 1s") {
+		t.Fatalf("slow up: %+v", r)
+	}
+	if r := Run(t.Context(), fixedProbe{check.StatusUp, 500 * time.Millisecond}, c, "probe-a", ""); r.Status != check.StatusUp {
+		t.Fatalf("fast up: %+v", r)
+	}
+	if r := Run(t.Context(), fixedProbe{check.StatusDown, 3 * time.Second}, c, "probe-a", ""); r.Status != check.StatusDown {
+		t.Fatalf("slow down must stay down: %+v", r)
+	}
+	c.LatencyWarning = c.Timeout
+	if err := c.Validate(); err == nil {
+		t.Fatal("latency_warning equal to timeout accepted")
+	}
+}

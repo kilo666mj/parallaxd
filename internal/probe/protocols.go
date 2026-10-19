@@ -390,14 +390,14 @@ func (t TLS) Probe(ctx context.Context, c check.Check) (check.Status, time.Durat
 	state := tc.ConnectionState()
 	peer := state.PeerCertificates[0]
 	detail := fmt.Sprintf("TLS %x; %s; expires %s", state.Version, peer.Subject.CommonName, peer.NotAfter.UTC().Format(time.RFC3339))
+	if c.ExpectBody != "" && !strings.Contains(detail, c.ExpectBody) {
+		return check.StatusDown, time.Since(start), fmt.Sprintf("TLS peer %q does not contain %q", detail, c.ExpectBody)
+	}
 	if c.TLSExpiryWarning > 0 {
 		remaining := time.Until(peer.NotAfter)
 		if remaining <= c.TLSExpiryWarning {
-			return check.StatusDown, time.Since(start), fmt.Sprintf("%s; certificate expires in %s (warning threshold %s)", detail, remaining.Round(time.Minute), c.TLSExpiryWarning)
+			return check.StatusWarning, time.Since(start), fmt.Sprintf("%s; certificate expires in %s (warning threshold %s)", detail, remaining.Round(time.Minute), c.TLSExpiryWarning)
 		}
-	}
-	if c.ExpectBody != "" && !strings.Contains(detail, c.ExpectBody) {
-		return check.StatusDown, time.Since(start), fmt.Sprintf("TLS peer %q does not contain %q", detail, c.ExpectBody)
 	}
 	return check.StatusUp, time.Since(start), detail
 }

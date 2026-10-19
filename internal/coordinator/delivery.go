@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -159,7 +160,7 @@ func validateAlertSelector(cfg Config, checks, components, probers []string, kin
 
 func validKind(kind Kind) bool {
 	switch kind {
-	case KindDown, KindRecovered, KindSilent, KindReporting, KindIsolated, KindRejoined,
+	case KindDown, KindRecovered, KindWarning, KindWarningCleared, KindSilent, KindReporting, KindIsolated, KindRejoined,
 		KindUnwatched, KindWatched, KindWatchLost, KindWatchRecovered:
 		return true
 	}
@@ -380,6 +381,10 @@ func (c *Coordinator) scheduleEscalations(now time.Time) bool {
 				continue
 			}
 			if !selectorMatches(incident.Alert, policy.Checks, policy.Components, policy.Probers, policy.Kinds) {
+				continue
+			}
+			// Warnings are not pages: only a policy that names them escalates them.
+			if incident.Kind == KindWarning && !slices.Contains(policy.Kinds, KindWarning) {
 				continue
 			}
 			c.nextDeliveryID++

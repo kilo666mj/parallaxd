@@ -106,13 +106,15 @@ func (c Component) Validate(known map[string]bool) error {
 // enough to take the component down, it is down whether or not the others have
 // reported.
 func (c Component) Roll(status map[string]Status) Status {
-	var down, up, undecided int
+	var down, up, warning, undecided int
 	for _, name := range c.Checks {
 		switch status[name] {
 		case StatusDown:
 			down++
 		case StatusUp:
 			up++
+		case StatusWarning:
+			warning++
 		default:
 			undecided++
 		}
@@ -121,8 +123,11 @@ func (c Component) Roll(status map[string]Status) Status {
 	if c.isDown(down, len(c.Checks)) {
 		return StatusDown
 	}
-	if undecided > 0 || up == 0 {
+	if undecided > 0 || up+warning == 0 {
 		return StatusUnknown
+	}
+	if warning > 0 {
+		return StatusWarning
 	}
 	return StatusUp
 }

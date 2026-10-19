@@ -59,13 +59,16 @@ type Verdict struct {
 	Check  string
 	Status check.Status
 
-	// Down, Up and Unknown count the probers whose results were counted,
-	// after discarding and de-duplication.
+	// Down, Up, Warning and Unknown count the probers whose results were
+	// counted, after discarding and de-duplication.
 	Down    int
 	Up      int
+	Warning int
 	Unknown int
 	// Independent counts also collapse shared proxy exits, and, when required,
 	// hosting providers. Recovery must use the same independence rule as Down.
+	// IndependentUp counts up and warning votes alike: both say the target
+	// answered, which is what recovery has to establish.
 	IndependentUp   int
 	IndependentDown int
 
@@ -141,21 +144,24 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 	}
 	sort.Strings(v.SuppressedProbers)
 
-	var down, up []check.Result
+	var down, up, warning []check.Result
 	for _, r := range byProber {
 		switch r.Status {
 		case check.StatusDown:
 			down = append(down, r)
 		case check.StatusUp:
 			up = append(up, r)
+		case check.StatusWarning:
+			warning = append(warning, r)
 		default:
 			v.Unknown++
 		}
 	}
-	v.Down, v.Up = len(down), len(up)
-	v.Counted = v.Down + v.Up
+	v.Down, v.Up, v.Warning = len(down), len(up), len(warning)
+	v.Counted = v.Down + v.Up + v.Warning
 	v.IndependentDown = IndependentCount(down, c.Quorum.DistinctProviders)
-	v.IndependentUp = IndependentCount(up, c.Quorum.DistinctProviders)
+	answered := append(append([]check.Result(nil), up...), warning...)
+	v.IndependentUp = IndependentCount(answered, c.Quorum.DistinctProviders)
 
 	// Down first: a target reachable from two vantages and unreachable from
 	// three is having an outage, and reporting "up" because somebody could
@@ -163,7 +169,7 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 	if agreed, providers, ok := satisfies(c.Quorum, down); ok {
 		v.Status = check.StatusDown
 		v.Providers = providers
-		v.Dissent = names(up)
+		v.Dissent = names(answered)
 		v.Reason = downReason(c, agreed, v, providers)
 		return v
 	}
@@ -195,10 +201,25 @@ func Evaluate(c check.Check, results []check.Result, opts Options) Verdict {
 		return v
 	}
 
+	// A warning needs the same agreement as an outage, so one prober cannot
+	// raise one alone. Without that agreement the target answered and
+	// behaved, which is up; the minority warning is kept as dissent.
+	if _, providers, ok := satisfies(c.Quorum, warning); ok {
+		v.Status = check.StatusWarning
+		v.Providers = providers
+		v.Dissent = names(up)
+		v.Reason = fmt.Sprintf("%d of %d reported a warning", v.Warning, v.Counted)
+		return v
+	}
+
 	v.Status = check.StatusUp
-	_, providers, _ := satisfies(c.Quorum, up)
+	_, providers, _ := satisfies(c.Quorum, answered)
 	v.Providers = providers
 	v.Reason = fmt.Sprintf("%d of %d reported up", v.Up, v.Counted)
+	if v.Warning > 0 {
+		v.Dissent = names(warning)
+		v.Reason += fmt.Sprintf("; %d warning short of quorum %d", v.Warning, c.Quorum.Agree)
+	}
 	return v
 }
 

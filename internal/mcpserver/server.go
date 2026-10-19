@@ -83,7 +83,7 @@ type historyInput struct {
 func New(client Client, version string) *mcp.Server {
 	server := mcpkit.MustServer(mcpkit.ServerConfig{Name: "parallaxd", Version: version,
 		Instructions: "Use Parallaxd tools to inspect corroborated availability and manage the live monitor catalogue. Validate and test monitors before saving changes."})
-	addGetTool(server, client, "parallaxd_get_status", "Read the current status and assignment of every enabled monitor.", "/v1/status")
+	addGetTool(server, client, "parallaxd_get_status", "Read the current status (up, warning, down or unknown) and assignment of every enabled monitor.", "/v1/status")
 	addGetTool(server, client, "parallaxd_list_monitors", "List complete enabled and disabled monitor definitions.", "/v1/monitors")
 	addGetTool(server, client, "parallaxd_get_incidents", "Read active and resolved incidents, newest first.", "/v1/incidents")
 	addGetTool(server, client, "parallaxd_get_components", "Read service-level component status.", "/v1/components")
