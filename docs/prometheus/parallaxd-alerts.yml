@@ -1,0 +1,83 @@
+# Alert rules for parallaxd's own health. They cover failures that parallaxd
+# cannot report through its own notifications: no reachable or active
+# coordinator, two active coordinators, stalled replication, a delivery
+# backlog, a saturated result queue, journal write failures and
+# corroboration that keeps ending inconclusive. Target health is parallaxd's
+# job, not these rules'.
+groups:
+  - name: parallaxd
+    rules:
+      - alert: ParallaxdMetricsDown
+        expr: up{job="parallaxd"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "parallaxd coordinator {{ $labels.instance }} cannot be scraped"
+
+      - alert: ParallaxdNoActiveCoordinator
+        expr: sum(parallaxd_ha_active) < 1 or absent(parallaxd_ha_active)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No parallaxd coordinator is active; monitoring and alerting have stopped"
+
+      - alert: ParallaxdSeveralActiveCoordinators
+        expr: sum(parallaxd_ha_active) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than one parallaxd coordinator is active; check fencing"
+
+      - alert: ParallaxdReplicationFailing
+        expr: parallaxd_replication_error == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Standby {{ $labels.instance }} cannot replicate from the primary"
+
+      - alert: ParallaxdReplicationStale
+        expr: >-
+          (time() - parallaxd_replication_last_sync_timestamp_seconds) > 300
+          and on(instance) parallaxd_ha_role{role="standby"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Standby {{ $labels.instance }} last synced {{ $value | humanizeDuration }} ago"
+
+      - alert: ParallaxdNotificationBacklog
+        expr: parallaxd_notifications_oldest_pending_age_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "parallaxd alerts on {{ $labels.instance }} have been undelivered for {{ $value | humanizeDuration }}"
+
+      - alert: ParallaxdResultQueueSaturated
+        expr: parallaxd_result_queue_depth / parallaxd_result_queue_capacity > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "parallaxd result queue on {{ $labels.instance }} is over 80% full"
+
+      - alert: ParallaxdHistoryWriteFailures
+        expr: increase(parallaxd_history_write_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "parallaxd on {{ $labels.instance }} is failing to write its observation journal"
+
+      - alert: ParallaxdCorroborationInconclusive
+        expr: >-
+          rate(parallaxd_corroborations_inconclusive_total[30m])
+          / rate(parallaxd_corroborations_total[30m]) > 0.5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most parallaxd corroborations on {{ $labels.instance }} end inconclusive; check prober reachability and quorum settings"
