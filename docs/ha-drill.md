@@ -111,7 +111,11 @@ are untouched. Update inventory roles before the next ordinary deployment.
 
 The helper's preparation path is safe to run before an exercise. Its execution
 path requires a disposable rehearsal or an announced recovery window; a syntax
-check is not evidence that a site's fencing or rebuild procedure works.
+check is not evidence that a site's fencing or rebuild procedure works. An
+existing standby can be rebuilt as a standby of the same primary to rehearse the
+whole path without changing roles; see the
+[example rehearsal record](ha-rebuild-example.md). Expect the first sync of an
+empty standby to take minutes when the primary retains a lot of history.
 
 - [ ] Preserve or archive its old state before reconfiguration.
 - [ ] Configure it as standby with the current coordinator identity and
