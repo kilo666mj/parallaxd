@@ -58,7 +58,7 @@ func TestServerPublishesExpectedToolsAndReadsStatus(t *testing.T) {
 	for _, tool := range listed.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"parallaxd_get_status", "parallaxd_list_monitors", "parallaxd_get_monitor_options", "parallaxd_create_monitor", "parallaxd_delete_monitor", "parallaxd_rollback_monitors", "parallaxd_get_history"} {
+	for _, want := range []string{"parallaxd_get_status", "parallaxd_list_monitors", "parallaxd_get_monitor_options", "parallaxd_create_monitor", "parallaxd_delete_monitor", "parallaxd_rollback_monitors", "parallaxd_get_history", "parallaxd_list_maintenance", "parallaxd_create_maintenance", "parallaxd_update_maintenance", "parallaxd_delete_maintenance"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("missing tool %q in %v", want, names)
 		}
@@ -198,5 +198,36 @@ func TestHostedForwardsRequestTokenAndEnforcesAPIAuthorization(t *testing.T) {
 	}
 	if !write.IsError {
 		t.Fatal("viewer mutation unexpectedly succeeded")
+	}
+}
+
+func TestCreateMaintenanceUsesMaintenanceAPI(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/maintenance" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["actor"] != "mcp-agent" || body["every"] != "168h" || body["name"] != "patching" {
+			t.Fatalf("body = %#v", body)
+		}
+		if _, ok := body["starts_at"]; ok {
+			t.Fatalf("empty starts_at was sent: %#v", body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"name":"patching"}`))
+	}))
+	defer api.Close()
+	session := connect(t, New(Client{BaseURL: api.URL, Token: "secret", Actor: "mcp-agent"}, "test"))
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: "parallaxd_create_maintenance", Arguments: map[string]any{"name": "patching", "ends_at": "2030-01-01T04:00:00Z", "every": "168h"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %#v", result.Content)
 	}
 }

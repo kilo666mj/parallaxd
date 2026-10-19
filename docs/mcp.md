@@ -1,8 +1,8 @@
 # MCP agent access
 
 The coordinator serves a stateless Streamable HTTP MCP endpoint at `POST /mcp`.
-It exposes typed tools for fleet status, incidents, diagnostics, history, and
-the versioned monitor catalogue.
+It exposes typed tools for fleet status, incidents, diagnostics, history,
+maintenance windows, and the versioned monitor catalogue.
 
 MCP is another authenticated interface to the existing operator API, not a
 second control plane. The bearer token from each MCP request is used for every
@@ -17,8 +17,8 @@ independently.
 
 | Role | MCP capabilities |
 |---|---|
-| `viewer` | Read status, monitors, incidents, components, diagnostics, history, monitor options, and catalogue revisions |
-| `operator` | All viewer tools plus validate, test, create, update, and delete monitors |
+| `viewer` | Read status, monitors, incidents, components, diagnostics, history, monitor options, maintenance windows, and catalogue revisions |
+| `operator` | All viewer tools plus validate, test, create, update, and delete monitors and maintenance windows |
 | `admin` | All operator tools plus catalogue rollback |
 
 Start with `viewer`. Upgrade the credential only when the client has a real

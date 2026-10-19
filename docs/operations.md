@@ -128,6 +128,40 @@ Automation should prove each layer independently. A green coordinator page is
 not evidence that its backup restores, and a running standby process is not
 evidence that it has a usable recovery point.
 
+## Maintenance windows
+
+During a maintenance window, matching alerts are recorded as suppressed
+incidents but not delivered. If an incident is still active when the window
+ends, or when the window is deleted or narrowed, it is delivered then. Scope a
+window with `checks`, `components` and `probers`; leave all three empty to
+cover the whole fleet.
+
+Windows come from two places:
+
+- `parallaxd_maintenance` in the coordinator configuration. These are
+  read-only through the API and change only with an Ansible rollout.
+- The operator API, MCP tools (`parallaxd_create_maintenance`,
+  `parallaxd_update_maintenance`, `parallaxd_delete_maintenance`) or the
+  dashboard's Incidents page. These are stored in coordinator state, replicated
+  to the standby, and record who created and last changed them.
+
+`every` repeats a window at a fixed period after `starts_at`, for example
+`"24h"` or `"168h"`, and must be longer than the window itself. The period is a
+fixed duration, so a weekly window keeps its UTC time and moves by an hour in
+local time when daylight saving time changes.
+
+```sh
+curl -fsS -H "Authorization: Bearer $PARALLAXD_TOKEN" \
+  -d '{"name":"os-patching","starts_at":"2026-11-01T03:00:00Z",
+       "ends_at":"2026-11-01T04:00:00Z","every":"168h","probers":["probe-a"]}' \
+  https://status.example.com/v1/maintenance
+```
+
+`PUT /v1/maintenance/{name}` replaces a managed window and `DELETE` removes it;
+both require the `operator` role. A coordinator older than this feature refuses
+to load state that contains managed windows, so upgrade the standby before
+creating the first one.
+
 ## Every day
 
 - Confirm a dedicated viewer credential can initialize `/mcp` and call
