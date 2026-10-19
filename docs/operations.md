@@ -128,6 +128,49 @@ Automation should prove each layer independently. A green coordinator page is
 not evidence that its backup restores, and a running standby process is not
 evidence that it has a usable recovery point.
 
+## Coordinator metrics
+
+`GET /metrics` serves the coordinator's own health in the Prometheus text
+format. It needs a `viewer` credential, like the rest of the operator API, and
+works on the standby too, so scrape both coordinators. Labels name only
+configured checks, probers and notification destinations, plus fixed rejection
+reasons, so the number of series stays bounded.
+
+| Metric | Meaning |
+|---|---|
+| `parallaxd_ha_active`, `parallaxd_ha_promoted`, `parallaxd_ha_role{role}` | Which coordinator is writing |
+| `parallaxd_replication_lag_seconds`, `parallaxd_replication_last_sync_timestamp_seconds`, `parallaxd_replication_error` | Standby replication |
+| `parallaxd_result_queue_depth`, `parallaxd_result_queue_capacity`, `parallaxd_results_rejected_total{reason}` | Result intake |
+| `parallaxd_corroborations_total`, `parallaxd_corroborations_inconclusive_total`, `parallaxd_corroboration_duration_seconds_total` | Corroboration count, inconclusive rate and average latency |
+| `parallaxd_notifications_pending`, `parallaxd_notifications_oldest_pending_age_seconds`, `parallaxd_notification_{attempts,failures}_total{destination}` | Alert delivery |
+| `parallaxd_history_write_failures_total` | Observation journal |
+| `parallaxd_incidents_active`, `parallaxd_incidents_suppressed` | Open incidents |
+| `parallaxd_check_status{check,status}`, `parallaxd_check_stale`, `parallaxd_check_suspected`, `parallaxd_check_last_verdict_age_seconds` | Per-check state |
+| `parallaxd_prober_mesh_report_age_seconds`, `parallaxd_prober_isolated`, `parallaxd_prober_silent` | Per-prober freshness |
+
+Counters reset when the coordinator restarts. Average corroboration latency is
+`rate(parallaxd_corroboration_duration_seconds_total[30m]) /
+rate(parallaxd_corroborations_total[30m])`.
+
+Store a dedicated viewer token on the Prometheus host and scrape over the same
+private transport you use for the operator API:
+
+```yaml
+scrape_configs:
+  - job_name: parallaxd
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/parallaxd-viewer.token
+    static_configs:
+      - targets: ["coordinator-a.example.com:8972", "coordinator-b.example.com:8972"]
+```
+
+Load [`docs/prometheus/parallaxd-alerts.yml`](prometheus/parallaxd-alerts.yml)
+as a rule file. It covers what parallaxd cannot report through its own
+notifications: no active coordinator or two at once, failing replication, an
+undelivered alert backlog, a saturated result queue, journal write failures,
+and corroboration that keeps ending inconclusive. Check it with
+`promtool check rules` after editing.
 ## Maintenance windows
 
 During a maintenance window, matching alerts are recorded as suppressed
