@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tintwire "go.michaelspost.com/tintwire-go"
 )
@@ -71,5 +72,18 @@ func TestAssuranceAlertRejectsBadInput(t *testing.T) {
 	cfg := assuranceAlertConfig{Webhook: "unused", Host: "h", StateDir: t.TempDir()}
 	if err := publishAssurance(t.Context(), &recordingPublisher{}, cfg, "x.service", "maybe", nil); err == nil {
 		t.Fatal("unknown result accepted")
+	}
+}
+
+func TestAssuranceSummaryFitsTintwireByteLimit(t *testing.T) {
+	cfg := assuranceAlertConfig{Webhook: "unused", Host: "h", StateDir: t.TempDir()}
+	pub := &recordingPublisher{}
+	tail := func(string) string { return strings.Repeat("check — failed ", 80) + "the end" }
+	if err := publishAssurance(t.Context(), pub, cfg, "x.service", "failure", tail); err != nil {
+		t.Fatal(err)
+	}
+	s := pub.cards[0].Summary
+	if len(s) > 500 || !utf8.ValidString(s) || !strings.HasSuffix(s, "the end") {
+		t.Fatalf("summary %d bytes, valid=%v: %q", len(s), utf8.ValidString(s), s)
 	}
 }

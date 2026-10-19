@@ -168,10 +168,11 @@ func tintwireSeverity(kind Kind) tintwire.Severity {
 	}
 }
 
+// truncateRunes shortens value to at most maximum bytes, which is how
+// Tintwire measures its limits, without splitting a character.
 func truncateRunes(value string, maximum int) string {
-	if utf8.RuneCountInString(value) <= maximum {
+	if len(value) <= maximum {
 		return value
 	}
-	runes := []rune(value)
-	return string(runes[:maximum-1]) + "…"
+	return truncateBytes(value, maximum-len("…")) + "…"
 }
