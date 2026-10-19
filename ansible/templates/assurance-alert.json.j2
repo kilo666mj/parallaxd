@@ -1,0 +1,13 @@
+{#- Reuses a coordinator notification destination; only the Tintwire driver is supported. -#}
+{%- set dest = parallaxd_notification_destinations | selectattr('name', 'equalto', parallaxd_assurance_alert_destination) | first -%}
+{%- set fallback = dest.fallback | default('') -%}
+{%- if fallback == 'webhook' -%}
+{%- set fallback_url = parallaxd_webhook -%}
+{%- elif fallback -%}
+{%- set fallback_url = parallaxd_notification_destinations | selectattr('name', 'equalto', fallback) | map(attribute='webhook') | first -%}
+{%- else -%}
+{%- set fallback_url = '' -%}
+{%- endif -%}
+{{ {'webhook': dest.webhook, 'fallback_webhook': fallback_url, 'channel': dest.channel | default(''),
+    'source': dest.username | default('parallaxd'), 'host': inventory_hostname,
+    'state_dir': '/var/lib/parallaxd-operations/alerts'} | to_nice_json }}

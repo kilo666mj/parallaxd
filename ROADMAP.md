@@ -60,8 +60,10 @@ exercise; it has not been exercised against the live primary.
   result. Provider/network fencing and service-entry-point movement stay
   operator-controlled; neither is triggered by loss of contact.
 - Address findings from the weekly audit; unavailable private inventory or
-  retention evidence must be reported as verification gaps. Immediate alert
-  routing for assurance-job failures remains a site integration option.
+  retention evidence must be reported as verification gaps. Assurance-job and
+  backup-verification failures can alert immediately through Tintwire
+  (`parallaxd_assurance_alert_destination_name`); timer and host liveness still
+  belong to independent monitoring.
 - Continue periodic end-to-end delivery exercises, access reviews, and recovery
   drills from [operations.md](docs/operations.md). These are recurring duties,
   not missing coordinator features.

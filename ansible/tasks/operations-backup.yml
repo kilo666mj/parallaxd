@@ -7,6 +7,10 @@
       [Unit]
       Description=Restore-test Parallaxd backup {{ backup_instance.name }}
       RequiresMountsFor={{ backup_instance.root }}
+      {% if parallaxd_assurance_alert_destination | default('') %}
+      OnFailure=parallaxd-assurance-failed@%n.service
+      OnSuccess=parallaxd-assurance-ok@%n.service
+      {% endif %}
       [Service]
       Type=oneshot
       ExecStart=/usr/local/libexec/parallaxd/parallaxd-verify -verify-backup {{ backup_instance.root }}

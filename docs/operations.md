@@ -52,9 +52,33 @@ cat /var/lib/parallaxd-operations/coordinator.json
 journalctl -u parallaxd-verify-backup-primary.service
 ```
 
-Failures return nonzero and appear as failed systemd units. Connect those units
-and report freshness to the site's independent monitoring; these checks do not
-send messages themselves. Rejection counters use the prior report as a baseline;
+Failures return nonzero and appear as failed systemd units. To be told
+immediately, set `parallaxd_assurance_alert_destination_name` to the name of a
+Tintwire entry in `parallaxd_notification_destinations` and pass
+`parallaxd_verify_binary` for every assurance host, not only the backup host.
+It may include `{{ parallaxd_goarch }}` (`amd64`, `arm64`) when hosts differ:
+
+```sh
+for arch in amd64 arm64; do
+  CGO_ENABLED=0 GOARCH=$arch go build -o /tmp/parallaxd-verify-$arch ./cmd/parallaxd
+done
+# parallaxd_verify_binary: /tmp/parallaxd-verify-{{ parallaxd_goarch }}
+```
+
+Each assurance and backup-verification unit then gets `OnFailure=` and
+`OnSuccess=` hooks that run the verifier binary with `-assurance-alert`: a
+failure publishes a firing card (with the unit's last journal lines) through
+Tintwire, falling back to the destination's Mattermost webhook, and the next
+success resolves it. Successes with no open failure send nothing. To test the
+path on one host:
+
+```sh
+systemctl start parallaxd-assurance-failed@parallaxd-operations-coordinator.service.service
+systemctl start parallaxd-assurance-ok@parallaxd-operations-coordinator.service.service
+```
+
+The hooks do not cover a timer that stops firing or a host that is down; keep
+report freshness in the site's independent monitoring. Rejection counters use the prior report as a baseline;
 the first run establishes that baseline, and lower counts allow for restarts.
 
 To verify a filesystem backup manually:

@@ -7,6 +7,10 @@
       [Unit]
       Description=Parallaxd {{ operations_kind }} assurance
       After=network-online.target
+      {% if parallaxd_assurance_alert_destination | default('') %}
+      OnFailure=parallaxd-assurance-failed@%n.service
+      OnSuccess=parallaxd-assurance-ok@%n.service
+      {% endif %}
       [Service]
       Type=oneshot
       ExecStart=/usr/bin/python3 /usr/local/libexec/parallaxd/check-operations.py --kind {{ operations_kind }} --config /etc/parallaxd/{{ 'watch' if operations_kind == 'watcher' else 'coordinator' }}.json --report /var/lib/parallaxd-operations/{{ operations_kind }}.json {{ '--mcp' if operations_kind == 'coordinator' else '' }}
