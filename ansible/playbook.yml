@@ -128,7 +128,7 @@
             (parallaxd_component_versions.results
              | selectattr('item', 'equalto', item.0)
              | map(attribute='stdout') | first | trim) }}"
-          -o {{ playbook_dir }}/../parallaxd-{{ item.0 }}-linux-{{ item.1 }}
+          -o {{ playbook_dir }}/../dist/{{ item.0 }}-linux-{{ item.1 }}
           ./cmd/{{ item.0 }}
         chdir: "{{ playbook_dir }}/.."
       environment:
@@ -155,7 +155,7 @@
     - name: Install the coordinator binary
       tags: [code]
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../parallaxd-parallaxd-linux-{{ parallaxd_goarch }}"
+        src: "{{ playbook_dir }}/../dist/parallaxd-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd
         mode: "0755"
       when: inventory_hostname in parallaxd_coordinator_nodes
@@ -164,7 +164,7 @@
     - name: Install the prober binary
       tags: [code]
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../parallaxd-parallaxd-probe-linux-{{ parallaxd_goarch }}"
+        src: "{{ playbook_dir }}/../dist/parallaxd-probe-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd-probe
         mode: "0755"
       when: inventory_hostname in groups['parallaxd_probers']
@@ -173,7 +173,7 @@
     - name: Install the watcher binary
       tags: [code]
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../parallaxd-parallaxd-watch-linux-{{ parallaxd_goarch }}"
+        src: "{{ playbook_dir }}/../dist/parallaxd-watch-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd-watch
         mode: "0755"
       when: inventory_hostname in groups['parallaxd_watch'] | default([])
@@ -182,14 +182,14 @@
     - name: Install the encrypted-network enrollment command
       tags: [code, network]
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../parallaxd-parallaxd-network-linux-{{ parallaxd_goarch }}"
+        src: "{{ playbook_dir }}/../dist/parallaxd-network-linux-{{ parallaxd_goarch }}"
         dest: /usr/local/bin/parallaxd-network
         mode: "0755"
 
     - name: Stage the encrypted-network command for check-mode validation
       tags: [network]
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../parallaxd-parallaxd-network-linux-{{ parallaxd_goarch }}"
+        src: "{{ playbook_dir }}/../dist/parallaxd-network-linux-{{ parallaxd_goarch }}"
         dest: /tmp/parallaxd-network-check
         mode: "0755"
       when: ansible_check_mode
