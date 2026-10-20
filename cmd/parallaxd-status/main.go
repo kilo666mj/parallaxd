@@ -184,6 +184,16 @@ type pageGroup struct {
 	Rows []pageRow
 }
 
+type pageNotice struct {
+	Title    string
+	State    string
+	Tone     string // down for open incidents, warning for maintenance, up when closed
+	Affected []string
+	StartsAt time.Time
+	EndsAt   time.Time
+	Updates  []coordinator.ExportNoticeUpdate
+}
+
 type page struct {
 	Title       string
 	LogoURL     string
@@ -193,6 +203,11 @@ type page struct {
 	Stale       bool
 	MaxAge      time.Duration
 	Groups      []pageGroup
+	// Incidents and Maintenance are open notices; Past were closed in the
+	// last week. Notices never change the statuses above.
+	Incidents   []pageNotice
+	Maintenance []pageNotice
+	Past        []pageNotice
 }
 
 func build(cfg config, export coordinator.Export, now time.Time) (page, []string) {
@@ -257,6 +272,8 @@ func build(cfg config, export coordinator.Export, now time.Time) (page, []string
 		p.Groups = append(p.Groups, pg)
 	}
 
+	p.Incidents, p.Maintenance, p.Past = notices(cfg, export.Notices)
+
 	total := counts["up"] + counts["warning"] + counts["down"] + counts["unknown"]
 	switch {
 	case p.Stale:
@@ -275,6 +292,58 @@ func build(cfg config, export coordinator.Export, now time.Time) (page, []string
 	return p, warnings
 }
 
+// notices sorts the export's public notices for the page. Only affected items
+// that the page lists are named, so internal names stay private.
+func notices(cfg config, exported []coordinator.ExportNotice) (incidents, maintenance, past []pageNotice) {
+	labels := map[string]string{}
+	for _, g := range cfg.Groups {
+		for _, it := range g.Items {
+			if it.Component != "" {
+				labels["component:"+it.Component] = cmpOr(it.Label, it.Component)
+			} else {
+				labels["check:"+it.Check] = cmpOr(it.Label, it.Check)
+			}
+		}
+	}
+	for _, n := range exported {
+		pn := pageNotice{Title: n.Title, State: n.State, StartsAt: n.StartsAt, EndsAt: n.EndsAt, Updates: n.Updates}
+		seen := map[string]bool{}
+		for _, key := range append(prefixed("component:", n.Components), prefixed("check:", n.Checks)...) {
+			if label, ok := labels[key]; ok && !seen[label] {
+				seen[label] = true
+				pn.Affected = append(pn.Affected, label)
+			}
+		}
+		switch {
+		case !n.ResolvedAt.IsZero():
+			pn.Tone = "up"
+			past = append(past, pn)
+		case n.Kind == coordinator.NoticeMaintenance:
+			pn.Tone = "warning"
+			maintenance = append(maintenance, pn)
+		default:
+			pn.Tone = "down"
+			incidents = append(incidents, pn)
+		}
+	}
+	return incidents, maintenance, past
+}
+
+func prefixed(prefix string, names []string) []string {
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = prefix + name
+	}
+	return out
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{
 	"label": func(status string) string {
 		switch status {
@@ -286,6 +355,15 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{
 			return "Outage"
 		}
 		return "Unknown"
+	},
+	"stateLabel": func(state string) string {
+		switch state {
+		case "in_progress":
+			return "In progress"
+		case "":
+			return ""
+		}
+		return strings.ToUpper(state[:1]) + state[1:]
 	},
 	"rfc3339":   func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 	"humanTime": func(t time.Time) string { return t.UTC().Format("2 Jan 2006 15:04 UTC") },
@@ -313,6 +391,11 @@ h2{font-size:15px;margin:0;padding:12px 16px;border-bottom:1px solid var(--line)
 .name{flex:1;min-width:0;overflow-wrap:anywhere}.uptime{color:var(--muted);font-size:13px;white-space:nowrap}
 .status{font-size:13px;font-weight:600;white-space:nowrap}.status.up{color:var(--up)}.status.warning{color:var(--warning)}.status.down{color:var(--down)}.status.unknown{color:var(--unknown)}
 footer{color:var(--muted);font-size:12px;margin-top:24px}
+.notice{padding:14px 16px;border-bottom:1px solid var(--line)}.notice:last-child{border-bottom:0}
+.notice h3{font-size:15px;margin:0 0 4px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.notice .state{font-size:12px;font-weight:600}.state.up{color:var(--up)}.state.warning{color:var(--warning)}.state.down{color:var(--down)}
+.meta{color:var(--muted);font-size:13px;margin:0 0 8px}.update{margin:8px 0 0}.update p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+details summary{cursor:pointer;padding:12px 16px;font-weight:600}
 </style>
 </head>
 <body>
@@ -321,9 +404,12 @@ footer{color:var(--muted);font-size:12px;margin-top:24px}
 <div class="overall {{.OverallTone}}">{{.Overall}}</div>
 <p class="updated">Updated <time datetime="{{rfc3339 .GeneratedAt}}">{{humanTime .GeneratedAt}}</time></p>
 <div id="stale" role="status">This page has not been updated recently, so the statuses below may be out of date.</div>
-{{range .Groups}}<section><h2>{{.Name}}</h2>
+{{if .Incidents}}<section><h2>Current incidents</h2>{{range .Incidents}}{{template "notice" .}}{{end}}</section>
+{{end}}{{if .Maintenance}}<section><h2>Scheduled maintenance</h2>{{range .Maintenance}}{{template "notice" .}}{{end}}</section>
+{{end}}{{range .Groups}}<section><h2>{{.Name}}</h2>
 {{range .Rows}}<div class="row"><span class="name">{{.Label}}</span>{{if .Uptime}}<span class="uptime" title="Uptime over the last 30 days">{{.Uptime}}</span>{{end}}<span class="status {{.Status}}">{{label .Status}}</span></div>
 {{end}}</section>
+{{end}}{{if .Past}}<section><details><summary>Recently resolved</summary>{{range .Past}}{{template "notice" .}}{{end}}</details></section>
 {{end}}<footer>Corroborated by independent probers with parallaxd. Uptime covers the last 30 days.</footer>
 </main>
 <script>
@@ -333,7 +419,11 @@ check();setInterval(check,30000)})();
 </script>
 </body>
 </html>
-`))
+{{define "notice"}}<div class="notice"><h3>{{.Title}} <span class="state {{.Tone}}">{{stateLabel .State}}</span></h3>
+{{if not .StartsAt.IsZero}}<p class="meta">Scheduled <time datetime="{{rfc3339 .StartsAt}}">{{humanTime .StartsAt}}</time> to <time datetime="{{rfc3339 .EndsAt}}">{{humanTime .EndsAt}}</time></p>{{end}}
+{{if .Affected}}<p class="meta">Affects {{range $i, $a := .Affected}}{{if $i}}, {{end}}{{$a}}{{end}}</p>{{end}}
+{{range .Updates}}<div class="update"><p class="meta"><strong>{{stateLabel .State}}</strong> · <time datetime="{{rfc3339 .At}}">{{humanTime .At}}</time></p><p>{{.Message}}</p></div>
+{{end}}</div>{{end}}`))
 
 // writeAtomic replaces dir/index.html so a reader never sees a partial page.
 func writeAtomic(dir string, content []byte) error {

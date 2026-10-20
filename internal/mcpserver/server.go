@@ -103,6 +103,45 @@ func maintenanceBody(client Client, input maintenanceInput) any {
 	}{input, client.Actor}
 }
 
+type noticeFields struct {
+	Title      string   `json:"title" jsonschema:"short public headline, at most 200 characters"`
+	Public     bool     `json:"public,omitempty" jsonschema:"true to publish on status pages through the signed export"`
+	Checks     []string `json:"checks,omitempty" jsonschema:"optional affected monitor names"`
+	Components []string `json:"components,omitempty" jsonschema:"optional affected component names"`
+	StartsAt   string   `json:"starts_at,omitempty" jsonschema:"RFC3339 announced start; required for maintenance, not allowed for incidents"`
+	EndsAt     string   `json:"ends_at,omitempty" jsonschema:"RFC3339 announced end; required for maintenance, not allowed for incidents"`
+}
+
+type createNoticeInput struct {
+	Kind  string `json:"kind" jsonschema:"incident or maintenance"`
+	State string `json:"state,omitempty" jsonschema:"incident: investigating, identified, monitoring or resolved; maintenance: scheduled, in_progress or completed; defaults to the first"`
+	noticeFields
+	Message string `json:"message" jsonschema:"first public update, at most 2000 characters"`
+}
+
+type postNoticeUpdateInput struct {
+	ID      uint64 `json:"id" jsonschema:"notice ID"`
+	State   string `json:"state,omitempty" jsonschema:"new state; omit to keep the current one. The last state of a kind resolves the notice, any other reopens it"`
+	Message string `json:"message" jsonschema:"public update text, at most 2000 characters"`
+}
+
+type editNoticeInput struct {
+	ID uint64 `json:"id" jsonschema:"notice ID"`
+	noticeFields
+}
+
+type deleteNoticeInput struct {
+	ID   uint64 `json:"id" jsonschema:"notice ID"`
+	Note string `json:"note,omitempty" jsonschema:"optional reason recorded in the coordinator log"`
+}
+
+func noticePath(id uint64, suffix string) (string, error) {
+	if id == 0 {
+		return "", fmt.Errorf("id is required")
+	}
+	return "/v1/notices/" + strconv.FormatUint(id, 10) + suffix, nil
+}
+
 type uptimeInput struct {
 	Since string `json:"since,omitempty" jsonschema:"optional RFC3339 start; defaults to 30 days ago"`
 	Until string `json:"until,omitempty" jsonschema:"optional RFC3339 end; defaults to now"`
@@ -119,6 +158,7 @@ func New(client Client, version string) *mcp.Server {
 	addGetTool(server, client, "parallaxd_get_history_summary", "Read retained availability and latency summaries for all monitors.", "/v1/history/summary")
 	addGetTool(server, client, "parallaxd_get_monitor_options", "List registered probers and providers available for monitor ownership and corroboration.", "/v1/monitor-options")
 	addGetTool(server, client, "parallaxd_list_monitor_revisions", "Read monitor catalogue revision history for audit and recovery.", "/v1/monitors/revisions")
+	addGetTool(server, client, "parallaxd_list_notices", "List operator-written status page notices (incidents and announced maintenance), newest first, with their update timelines.", "/v1/notices")
 	addGetTool(server, client, "parallaxd_list_maintenance", "List configured and managed maintenance windows, including recurring ones.", "/v1/maintenance")
 
 	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_get_history", Description: "Read retained observations, optionally filtered by monitor and time.", Annotations: mcpkit.ReadOnly(false)},
@@ -233,6 +273,46 @@ func New(client Client, version string) *mcp.Server {
 				return nil, document{}, err
 			}
 			return nil, document{Data: map[string]any{"deleted": true, "name": input.Name}}, nil
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_create_notice", Description: "Post an operator-written incident or maintenance notice with its first update. Public notices appear on status pages; notices never change corroborated statuses or suppress alerts. Requires an operator or admin token.", Annotations: mcpkit.Mutating(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input createNoticeInput) (*mcp.CallToolResult, document, error) {
+			body := struct {
+				createNoticeInput
+				Actor string `json:"actor,omitempty"`
+			}{input, client.Actor}
+			return mutate(ctx, func(out *any) error { return client.Post(ctx, "/v1/notices", body, out) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_post_notice_update", Description: "Add a timeline update to a notice and optionally change its state; posting resolved or completed closes it. Requires an operator or admin token.", Annotations: mcpkit.Mutating(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input postNoticeUpdateInput) (*mcp.CallToolResult, document, error) {
+			path, err := noticePath(input.ID, "/updates")
+			if err != nil {
+				return nil, document{}, err
+			}
+			body := map[string]string{"state": input.State, "message": input.Message, "actor": client.Actor}
+			return mutate(ctx, func(out *any) error { return client.Post(ctx, path, body, out) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_edit_notice", Description: "Replace a notice's title, visibility, affected items and schedule; send every field. Use parallaxd_post_notice_update to change its state. Requires an operator or admin token.", Annotations: mcpkit.Destructive(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input editNoticeInput) (*mcp.CallToolResult, document, error) {
+			path, err := noticePath(input.ID, "")
+			if err != nil {
+				return nil, document{}, err
+			}
+			body := struct {
+				noticeFields
+				Actor string `json:"actor,omitempty"`
+			}{input.noticeFields, client.Actor}
+			return mutate(ctx, func(out *any) error { return client.Put(ctx, path, body, out) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "parallaxd_delete_notice", Description: "Delete a notice posted by mistake; resolve real incidents instead so their history stays. Requires an operator or admin token.", Annotations: mcpkit.Destructive(false, false)},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input deleteNoticeInput) (*mcp.CallToolResult, document, error) {
+			path, err := noticePath(input.ID, "")
+			if err != nil {
+				return nil, document{}, err
+			}
+			if err := client.Delete(ctx, path, map[string]string{"actor": client.Actor, "note": input.Note}); err != nil {
+				return nil, document{}, err
+			}
+			return nil, document{Data: map[string]any{"deleted": true, "id": input.ID}}, nil
 		})
 	return server
 }

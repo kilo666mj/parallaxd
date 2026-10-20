@@ -231,6 +231,8 @@ type Coordinator struct {
 	nextIncidentID      uint64
 	silences            []Silence
 	maintenance         []Maintenance
+	notices             []Notice
+	nextNoticeID        uint64
 	nextSilenceID       uint64
 	diagnostics         Diagnostics
 	destinations        map[string]Notifier

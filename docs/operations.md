@@ -224,6 +224,48 @@ both require the `operator` role. A coordinator older than this feature refuses
 to load state that contains managed windows, so upgrade the standby before
 creating the first one.
 
+## Status notices
+
+Notices are operator-written posts for status pages: an incident with a
+timeline of updates, or announced maintenance. They are presentation only.
+They never change a corroborated status, open or close an automatic incident,
+or suppress an alert; use a maintenance window or silence for that. Post a
+maintenance notice and create a matching window when you want both.
+
+| Kind | States, in order |
+|---|---|
+| `incident` | `investigating`, `identified`, `monitoring`, `resolved` |
+| `maintenance` | `scheduled`, `in_progress`, `completed` |
+
+Maintenance needs `starts_at` and `ends_at`; incidents have neither. Each
+update adds a timeline entry and may change the state. Posting the last state
+resolves the notice and any other state reopens it.
+
+Only notices with `public: true` reach the signed export, and through it the
+[status page](status-page.md): open ones, plus those resolved in the last
+week. The export leaves out who wrote each update. It carries at most 20
+notices, the 10 newest updates of each, and 128 KiB of text.
+
+```sh
+curl -fsS -H "Authorization: Bearer $PARALLAXD_TOKEN" \
+  -d '{"kind":"incident","title":"Slow logins","public":true,
+       "checks":["login"],"message":"We are investigating slow logins."}' \
+  https://status.example.com/v1/notices
+curl -fsS -H "Authorization: Bearer $PARALLAXD_TOKEN" \
+  -d '{"state":"resolved","message":"A fix is deployed."}' \
+  https://status.example.com/v1/notices/1/updates
+```
+
+`PUT /v1/notices/{id}` replaces the title, `public`, affected items and
+schedule; `DELETE` removes a notice posted by mistake. All three need the
+`operator` role, as do the MCP tools (`parallaxd_create_notice`,
+`parallaxd_post_notice_update`, `parallaxd_edit_notice`,
+`parallaxd_delete_notice`) and the dashboard's Incidents page. Notices are
+stored in coordinator state and replicated to the standby. Resolved notices
+are dropped 90 days after resolution. A coordinator older than this feature
+refuses to load state that contains notices, so upgrade the standby before
+posting the first one.
+
 ## Every day
 
 - Confirm a dedicated viewer credential can initialize `/mcp` and call

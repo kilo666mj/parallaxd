@@ -58,7 +58,7 @@ func TestServerPublishesExpectedToolsAndReadsStatus(t *testing.T) {
 	for _, tool := range listed.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"parallaxd_get_status", "parallaxd_list_monitors", "parallaxd_get_monitor_options", "parallaxd_create_monitor", "parallaxd_delete_monitor", "parallaxd_rollback_monitors", "parallaxd_get_history", "parallaxd_list_maintenance", "parallaxd_create_maintenance", "parallaxd_update_maintenance", "parallaxd_delete_maintenance", "parallaxd_get_uptime"} {
+	for _, want := range []string{"parallaxd_get_status", "parallaxd_list_monitors", "parallaxd_get_monitor_options", "parallaxd_create_monitor", "parallaxd_delete_monitor", "parallaxd_rollback_monitors", "parallaxd_get_history", "parallaxd_list_maintenance", "parallaxd_create_maintenance", "parallaxd_update_maintenance", "parallaxd_delete_maintenance", "parallaxd_get_uptime", "parallaxd_list_notices", "parallaxd_create_notice", "parallaxd_post_notice_update", "parallaxd_edit_notice", "parallaxd_delete_notice"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("missing tool %q in %v", want, names)
 		}
@@ -229,5 +229,50 @@ func TestCreateMaintenanceUsesMaintenanceAPI(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("tool returned error: %#v", result.Content)
+	}
+}
+
+func TestNoticeToolsSendOnlyAPIFields(t *testing.T) {
+	var seen []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := body["id"]; ok {
+			t.Fatalf("%s %s sent the id in the body: %#v", r.Method, r.URL.Path, body)
+		}
+		if body["actor"] != "mcp-agent" {
+			t.Fatalf("%s %s actor=%v", r.Method, r.URL.Path, body["actor"])
+		}
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":7}`))
+	}))
+	defer api.Close()
+	session := connect(t, New(Client{BaseURL: api.URL, Token: "secret", Actor: "mcp-agent"}, "test"))
+	for _, call := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"parallaxd_create_notice", map[string]any{"kind": "incident", "title": "Slow logins", "message": "Looking into it.", "public": true}},
+		{"parallaxd_post_notice_update", map[string]any{"id": 7, "state": "resolved", "message": "Fixed."}},
+		{"parallaxd_edit_notice", map[string]any{"id": 7, "title": "Slow logins for some users"}},
+		{"parallaxd_delete_notice", map[string]any{"id": 7, "note": "duplicate"}},
+	} {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: call.name, Arguments: call.args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("%s returned error: %#v", call.name, result.Content)
+		}
+	}
+	want := []string{"POST /v1/notices", "POST /v1/notices/7/updates", "PUT /v1/notices/7", "DELETE /v1/notices/7"}
+	if !slices.Equal(seen, want) {
+		t.Fatalf("requests=%v, want %v", seen, want)
 	}
 }

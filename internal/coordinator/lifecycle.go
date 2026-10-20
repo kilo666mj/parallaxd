@@ -282,9 +282,9 @@ func incidentID(r *http.Request) (uint64, error) {
 
 func writeMutationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errIncidentNotFound), errors.Is(err, errSilenceNotFound), errors.Is(err, errMaintenanceNotFound):
+	case errors.Is(err, errIncidentNotFound), errors.Is(err, errSilenceNotFound), errors.Is(err, errMaintenanceNotFound), errors.Is(err, errNoticeNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, errIncidentInactive), errors.Is(err, errMaintenanceExists), errors.Is(err, errMaintenanceConfigured):
+	case errors.Is(err, errIncidentInactive), errors.Is(err, errMaintenanceExists), errors.Is(err, errMaintenanceConfigured), errors.Is(err, errNoticeFull):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
