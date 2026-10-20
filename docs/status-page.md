@@ -17,6 +17,14 @@ a tunnel with a connector on more than one host.
 - Each item's status (Operational, Degraded, Outage or Unknown) and 30-day
   uptime from the coordinator's [uptime report](operations.md#uptime).
 - An overall banner: all operational, degraded, partial or major outage.
+- Public [status notices](operations.md#status-notices): open incidents and
+  announced maintenance above the services, and notices resolved in the last
+  week in a collapsed list below them. A notice names only the affected items
+  that the page lists.
+
+Notices are written by operators and never change the corroborated statuses or
+the banner, so a page can show "Monitoring" on an incident while every check
+is Operational.
 
 A check the coordinator marks stale is shown as Unknown. If the export is older
 than `max_age` when the page is rendered, every item is shown as Unknown and

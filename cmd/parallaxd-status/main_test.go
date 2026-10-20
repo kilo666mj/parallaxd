@@ -137,3 +137,42 @@ func TestConfigRequiresExplicitItems(t *testing.T) {
 		t.Fatal("item naming both a check and a component was accepted")
 	}
 }
+
+func TestRendersNoticesWithoutUnlistedNames(t *testing.T) {
+	now := time.Now().UTC()
+	cfg := config{Title: "Example status", MaxAge: duration(5 * time.Minute), Groups: []group{{Name: "Services", Items: []item{
+		{Check: "website", Label: "Website"}, {Check: "api", Label: "Public API"},
+	}}}}
+	export := coordinator.Export{Version: 1, GeneratedAt: now, Checks: []coordinator.StatusEntry{{Check: "website", Status: "up"}, {Check: "api", Status: "up"}},
+		Notices: []coordinator.ExportNotice{
+			{ID: 3, Kind: "incident", Title: "Slow <logins>", State: "monitoring", Checks: []string{"api", "internal-secret-db"},
+				Updates: []coordinator.ExportNoticeUpdate{{At: now, State: "monitoring", Message: "A fix is out."}, {At: now.Add(-time.Hour), State: "investigating", Message: "Looking into it."}}},
+			{ID: 2, Kind: "maintenance", Title: "Database upgrade", State: "scheduled", StartsAt: now.Add(time.Hour), EndsAt: now.Add(2 * time.Hour),
+				Updates: []coordinator.ExportNoticeUpdate{{At: now, State: "scheduled", Message: "Brief read-only period."}}},
+			{ID: 1, Kind: "incident", Title: "Earlier outage", State: "resolved", ResolvedAt: now.Add(-time.Hour),
+				Updates: []coordinator.ExportNoticeUpdate{{At: now.Add(-time.Hour), State: "resolved", Message: "Fixed."}}},
+		}}
+	p, _ := build(cfg, export, now)
+	if len(p.Incidents) != 1 || len(p.Maintenance) != 1 || len(p.Past) != 1 {
+		t.Fatalf("incidents=%d maintenance=%d past=%d", len(p.Incidents), len(p.Maintenance), len(p.Past))
+	}
+	if p.Overall != "All systems operational" {
+		t.Fatalf("a notice changed the corroborated overall status: %q", p.Overall)
+	}
+	var out strings.Builder
+	if err := pageTemplate.Execute(&out, p); err != nil {
+		t.Fatal(err)
+	}
+	page := out.String()
+	for _, want := range []string{"Current incidents", "Slow &lt;logins&gt;", "Monitoring", "Affects Public API", "A fix is out.", "Scheduled maintenance", "Recently resolved", "Earlier outage"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page missing %q", want)
+		}
+	}
+	if strings.Contains(page, "internal-secret-db") {
+		t.Fatal("an unlisted check affected by a notice was published")
+	}
+	if strings.Index(page, "A fix is out.") > strings.Index(page, "Looking into it.") {
+		t.Fatal("updates are not newest first")
+	}
+}

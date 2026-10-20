@@ -22,6 +22,8 @@ type persistedState struct {
 	Silences            []Silence                  `json:"silences,omitempty"`
 	NextSilenceID       uint64                     `json:"next_silence_id,omitempty"`
 	Maintenance         []Maintenance              `json:"maintenance,omitempty"`
+	Notices             []Notice                   `json:"notices,omitempty"`
+	NextNoticeID        uint64                     `json:"next_notice_id,omitempty"`
 	Outbox              []Delivery                 `json:"outbox,omitempty"`
 	NextDeliveryID      uint64                     `json:"next_delivery_id,omitempty"`
 	Escalated           map[string]time.Time       `json:"escalated,omitempty"`
@@ -117,7 +119,7 @@ func (c *Coordinator) snapshot() persistedState {
 	for k, v := range c.componentStates {
 		components[k] = v
 	}
-	s := persistedState{Version: 6, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Maintenance: append([]Maintenance(nil), c.maintenance...), Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy, Monitors: c.monitorList(), MonitorRevisions: append([]MonitorRevision(nil), c.monitorRevisions...), NextMonitorRevision: c.nextMonitorRevision}
+	s := persistedState{Version: 6, Checks: map[string]persistedEntity{}, Components: map[string]persistedEntity{}, LastScheduled: map[string]time.Time{}, Silent: map[string]bool{}, Incidents: append([]Incident(nil), c.incidents...), NextIncidentID: c.nextIncidentID, Silences: append([]Silence(nil), c.silences...), NextSilenceID: c.nextSilenceID, Maintenance: append([]Maintenance(nil), c.maintenance...), Notices: c.noticesCopyLocked(), NextNoticeID: c.nextNoticeID, Outbox: append([]Delivery(nil), c.outbox...), NextDeliveryID: c.nextDeliveryID, Escalated: map[string]time.Time{}, Promoted: c.promoted.Load(), PromotedAt: c.promotedAt, PromotedBy: c.promotedBy, Monitors: c.monitorList(), MonitorRevisions: append([]MonitorRevision(nil), c.monitorRevisions...), NextMonitorRevision: c.nextMonitorRevision}
 	// Older coordinators must reject state containing proxy routes instead of
 	// silently restoring those monitors as direct checks. Include rollback
 	// revisions because they can reintroduce a removed route.
@@ -141,6 +143,10 @@ func (c *Coordinator) snapshot() persistedState {
 	// drop them and start alerting during planned work.
 	if len(s.Maintenance) > 0 {
 		s.Version = 8
+	}
+	// Likewise for operator notices, which would vanish from status pages.
+	if len(s.Notices) > 0 {
+		s.Version = 9
 	}
 
 	for k, v := range c.lastScheduled {
@@ -199,7 +205,7 @@ func (c *Coordinator) restore() error {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Errorf("parse state file: %w", err)
 	}
-	if s.Version < 1 || s.Version > 8 {
+	if s.Version < 1 || s.Version > 9 {
 		return fmt.Errorf("unsupported state version %d", s.Version)
 	}
 	return c.applyPersistedState(s, false)
@@ -275,6 +281,7 @@ func (c *Coordinator) applyPersistedState(s persistedState, replicated bool) err
 	c.incidents, c.nextIncidentID = append([]Incident(nil), s.Incidents...), s.NextIncidentID
 	c.silences, c.nextSilenceID = append([]Silence(nil), s.Silences...), s.NextSilenceID
 	c.maintenance = append([]Maintenance(nil), s.Maintenance...)
+	c.notices, c.nextNoticeID = append([]Notice(nil), s.Notices...), s.NextNoticeID
 	c.outbox, c.nextDeliveryID, c.escalated = outbox, s.NextDeliveryID, escalated
 	if s.Version >= 5 {
 		c.monitorRevisions = append([]MonitorRevision(nil), s.MonitorRevisions...)

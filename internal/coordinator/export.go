@@ -18,9 +18,9 @@ import (
 // it. A status page can then be built later, by anything, without this growing
 // a template engine.
 //
-// Human-written updates and subscriber notification stay outside this
-// automatic monitor. Durable automatic incidents and maintenance suppression
-// are exposed separately by the coordinator.
+// Operator-written notices travel in the export so a status page can show
+// them, but they never change the corroborated statuses next to them.
+// Subscriber notification stays outside this monitor.
 
 // exportVersion is the schema version of the document. A renderer off the
 // fleet is upgraded on someone else's schedule, so it needs to be able to say
@@ -60,6 +60,69 @@ type Export struct {
 
 	// Uptime covers the last 30 days for every check and component.
 	Uptime []Uptime `json:"uptime"`
+
+	// Notices are the public operator notices that are open, or were resolved
+	// in the last week, newest first. Older renderers ignore the field.
+	Notices []ExportNotice `json:"notices,omitempty"`
+}
+
+const (
+	exportNoticeWindow  = 7 * 24 * time.Hour
+	maxExportNotices    = 20
+	maxExportNoticeUpds = 10
+	maxExportNoticeText = 128 << 10
+)
+
+// ExportNotice is a public notice without operator identities.
+type ExportNotice struct {
+	ID         uint64               `json:"id"`
+	Kind       string               `json:"kind"`
+	Title      string               `json:"title"`
+	State      string               `json:"state"`
+	Checks     []string             `json:"checks,omitempty"`
+	Components []string             `json:"components,omitempty"`
+	StartsAt   time.Time            `json:"starts_at,omitzero"`
+	EndsAt     time.Time            `json:"ends_at,omitzero"`
+	CreatedAt  time.Time            `json:"created_at"`
+	UpdatedAt  time.Time            `json:"updated_at"`
+	ResolvedAt time.Time            `json:"resolved_at,omitzero"`
+	Updates    []ExportNoticeUpdate `json:"updates"`
+}
+
+type ExportNoticeUpdate struct {
+	At      time.Time `json:"at"`
+	State   string    `json:"state"`
+	Message string    `json:"message"`
+}
+
+// exportNotices bounds what leaves the fleet: at most 20 notices with their 10
+// newest updates each, and at most 128 KiB of text. JSON escaping can grow
+// text up to six times, which still keeps the export under the renderer's
+// 1 MiB limit when a busy incident has many long updates.
+func exportNotices(notices []Notice, now time.Time) []ExportNotice {
+	var out []ExportNotice
+	budget := maxExportNoticeText
+	for _, n := range notices {
+		if !n.Public || (!n.Open() && now.Sub(n.ResolvedAt) > exportNoticeWindow) {
+			continue
+		}
+		if budget -= len(n.Title); budget < 0 {
+			break
+		}
+		e := ExportNotice{ID: n.ID, Kind: n.Kind, Title: n.Title, State: n.State, Checks: n.Checks, Components: n.Components,
+			StartsAt: n.StartsAt, EndsAt: n.EndsAt, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, ResolvedAt: n.ResolvedAt}
+		for i := len(n.Updates) - 1; i >= 0 && len(e.Updates) < maxExportNoticeUpds; i-- {
+			u := n.Updates[i]
+			if budget -= len(u.Message); budget < 0 {
+				break
+			}
+			e.Updates = append(e.Updates, ExportNoticeUpdate{At: u.At, State: u.State, Message: u.Message})
+		}
+		if out = append(out, e); len(out) == maxExportNotices || budget < 0 {
+			break
+		}
+	}
+	return out
 }
 
 // Export builds the published document.
@@ -82,6 +145,7 @@ func (c *Coordinator) Export() Export {
 		Isolated:    m.Isolated,
 		Partitioned: m.Partitioned,
 		Uptime:      c.UptimeReport(c.now().UTC().Add(-defaultUptimePeriod), c.now().UTC()),
+		Notices:     exportNotices(c.Notices(), c.now().UTC()),
 	}
 }
 
