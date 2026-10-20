@@ -2,6 +2,8 @@ module github.com/kilo666mj/parallaxd
 
 go 1.27.1
 
+toolchain go1.27.3
+
 require (
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/modelcontextprotocol/go-sdk v1.8.0
