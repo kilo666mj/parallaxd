@@ -8,6 +8,11 @@
   and lag, result/delivery queues, delivery/history errors, and rejection-counter
   increases. The primary also checks fresh mesh reports for every configured
   prober, monitor ownership, stale observations, and MCP initialization/status.
+  Result queue depth includes in-flight processing, so a nonempty snapshot is
+  rechecked once per second up to 45 times before failing, allowing for the
+  default two 20-second corroboration windows. A queue that drains
+  during those rechecks passes; a persistent backlog, stale diagnostics, or a
+  failed diagnostics request still fails. Other health failures are preserved.
 - The watcher independently checks that it has received a fresh authenticated
   heartbeat. Its startup grace period alone does not count as healthy.
 - On a site-selected backup host, daily jobs restore each coordinator's backup
@@ -15,6 +20,8 @@
   units disable networking and make the backup filesystem read-only.
 
 Install the local checks from `ansible` with `ansible-playbook operations.yml`.
+Use `--tags assurance-checker` to update only the Python checker without changing
+units, timers, or the standalone verifier.
 To include backup verification, first build a binary for the backup host:
 
 ```sh

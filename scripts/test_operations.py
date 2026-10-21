@@ -3,6 +3,7 @@ import datetime as dt
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("operations", Path(__file__).with_name("check-operations.py"))
 ops = importlib.util.module_from_spec(spec)
@@ -31,6 +32,61 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(self.check(), [])
         self.mesh["Reporting"] = ["a"]
         self.assertTrue(self.check())
+
+    @patch.object(ops.time, "sleep")
+    def test_result_processing_can_drain_without_alerting(self, sleep):
+        busy = copy.deepcopy(self.d)
+        busy["result_queue"] = {"depth": 1, "capacity": 128}
+        samples = iter([busy, self.d])
+
+        def get(path):
+            if path == "/v1/diagnostics":
+                return next(samples)
+            return {"/v1/mesh": self.mesh, "/v1/status": []}[path]
+
+        failures, _ = ops.inspect_coordinator(get, self.cfg, self.now, None)
+        self.assertEqual(failures, [])
+        sleep.assert_called_once_with(1)
+
+        # A draining queue must not clear unrelated errors in the first snapshot.
+        busy["history"]["last_error"] = "private failure detail"
+        samples = iter([busy, self.d])
+        failures, _ = ops.inspect_coordinator(get, self.cfg, self.now, None)
+        self.assertEqual(failures, ["history persistence reports an error"])
+
+    @patch.object(ops.time, "sleep")
+    def test_persistent_result_backlog_still_fails(self, sleep):
+        self.d["result_queue"] = {"depth": 1, "capacity": 128}
+        self.assertEqual(self.check(), [
+            "result queue did not drain after 45 one-second rechecks (depth=1, capacity=128)"
+        ])
+        self.assertEqual(sleep.call_count, 45)
+
+    @patch.object(ops.time, "sleep")
+    def test_queue_can_drain_on_final_recheck(self, sleep):
+        busy = copy.deepcopy(self.d)
+        busy["result_queue"]["depth"] = 1
+        samples = iter([busy] * 44 + [self.d])
+        self.assertIsNone(ops.result_queue_failure(lambda _: next(samples), busy, self.now))
+        self.assertEqual(sleep.call_count, 45)
+
+    @patch.object(ops.time, "sleep")
+    def test_queue_confirmation_requires_fresh_reachable_diagnostics(self, sleep):
+        self.d["result_queue"]["depth"] = 1
+        stale = copy.deepcopy(self.d)
+        stale["result_queue"]["depth"] = 0
+        stale["generated_at"] = "2000-01-01T00:00:00Z"
+        self.assertEqual(ops.result_queue_failure(lambda _: stale, self.d, self.now),
+                         "stale diagnostics while checking result queue")
+        def unavailable(_):
+            raise OSError("unreachable")
+        with self.assertRaises(OSError):
+            ops.result_queue_failure(unavailable, self.d, self.now)
+
+    @patch.object(ops.time, "sleep")
+    def test_empty_queue_needs_no_rechecks(self, sleep):
+        self.assertEqual(self.check(), [])
+        sleep.assert_not_called()
 
     def test_errors_and_rejection_increases_fail(self):
         self.assertTrue(self.check({"bad_signature": 1}))
