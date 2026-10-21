@@ -10,7 +10,13 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import urllib.request
+
+
+# Normal corroboration may use two 20-second fan-out windows. Keep the drain
+# allowance above that and below the assurance service's 90-second timeout.
+RESULT_QUEUE_RECHECKS = 45
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -24,6 +30,23 @@ def age(value, now):
     if seconds < -60:
         raise ValueError("timestamp is in the future")
     return seconds
+
+
+def result_queue_failure(get, diagnostics, now):
+    # Depth includes results currently being processed, including corroboration.
+    # An occupied slot is normal; require a persistent backlog before alerting.
+    for _ in range(RESULT_QUEUE_RECHECKS):
+        if not diagnostics["result_queue"]["depth"]:
+            return None
+        time.sleep(1)
+        diagnostics = get("/v1/diagnostics")
+        if age(diagnostics["generated_at"], now) > 120:
+            return "stale diagnostics while checking result queue"
+    queue = diagnostics["result_queue"]
+    if queue["depth"]:
+        return (f"result queue did not drain after {RESULT_QUEUE_RECHECKS} one-second rechecks "
+                f"(depth={queue['depth']}, capacity={queue.get('capacity', 'unknown')})")
+    return None
 
 
 def inspect_coordinator(get, cfg, now, previous):
@@ -46,8 +69,9 @@ def inspect_coordinator(get, cfg, now, previous):
             failures.append("replication reports an error")
     elif not ha["active"]:
         failures.append("primary is inactive")
-    if d["result_queue"]["depth"]:
-        failures.append("result queue is nonempty")
+    queue_failure = result_queue_failure(get, d, now)
+    if queue_failure:
+        failures.append(queue_failure)
     if d["notifications"]["pending"]:
         failures.append("notification queue is nonempty")
     if d["notifications"].get("last_error") or any(

@@ -28,6 +28,7 @@
         - /var/lib/parallaxd-operations
 
     - name: Install read-only assurance checker
+      tags: [assurance-checker]
       ansible.builtin.copy:
         src: ../scripts/check-operations.py
         dest: /usr/local/libexec/parallaxd/check-operations.py
