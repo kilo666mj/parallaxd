@@ -154,6 +154,7 @@ reasons, so the number of series stays bounded.
 | `parallaxd_incidents_active`, `parallaxd_incidents_suppressed` | Open incidents |
 | `parallaxd_check_status{check,status}`, `parallaxd_check_stale`, `parallaxd_check_suspected`, `parallaxd_check_last_verdict_age_seconds` | Per-check state |
 | `parallaxd_prober_mesh_report_age_seconds`, `parallaxd_prober_isolated`, `parallaxd_prober_silent` | Per-prober freshness |
+| `parallaxd_prober_overruled_total{prober,check}` | Scheduled down or warning results that peers outvoted. A prober climbing on one group of checks likely has a broken path to those targets; HTTP failure details name the stalled phase and resolved address |
 
 Counters reset when the coordinator restarts. Average corroboration latency is
 `rate(parallaxd_corroboration_duration_seconds_total[30m]) /
