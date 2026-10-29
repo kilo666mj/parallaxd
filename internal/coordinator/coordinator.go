@@ -223,7 +223,11 @@ type Coordinator struct {
 	inconclusiveCorroborations atomic.Uint64
 	corroborationNanos         atomic.Int64
 
-	mu                  sync.Mutex
+	mu sync.Mutex
+	// overruled counts, per prober and check, scheduled failures that
+	// corroboration decided were up. A prober wrong about one zone otherwise
+	// looks exactly like a healthy one. Guarded by mu.
+	overruled           map[[2]string]uint64
 	states              map[string]*entityState
 	componentStates     map[string]*entityState
 	lastScheduled       map[string]time.Time
@@ -663,6 +667,17 @@ func (c *Coordinator) Process(ctx context.Context, r check.Result) (quorum.Verdi
 
 	v, alert, kind, suspectedAt := c.decide(ctx, chk, r)
 	c.recordObservation(chk, r, "scheduled", r.Vantage != chk.Vantage, v.Status)
+	// A minority down verdict is "inconclusive", not up, so overruled means
+	// enough peers answered to satisfy quorum without this prober.
+	if (r.Status == check.StatusDown || r.Status == check.StatusWarning) &&
+		v.Status != check.StatusDown && v.Status != r.Status && v.IndependentUp >= chk.Quorum.Agree {
+		c.mu.Lock()
+		if c.overruled == nil {
+			c.overruled = map[[2]string]uint64{}
+		}
+		c.overruled[[2]string{r.Prober, chk.Name}]++
+		c.mu.Unlock()
+	}
 
 	// A check inside a component alerts through the component, so an mx host
 	// going down produces one alert naming the failing ports rather than one

@@ -112,7 +112,23 @@ func (c *Coordinator) writeMetrics(out io.Writer) {
 	for name, value := range c.silent {
 		silent[name] = value
 	}
+	overruled := make([][2]string, 0, len(c.overruled))
+	overruledCount := make(map[[2]string]uint64, len(c.overruled))
+	for key, n := range c.overruled {
+		overruled = append(overruled, key)
+		overruledCount[key] = n
+	}
 	c.mu.Unlock()
+	sort.Slice(overruled, func(i, j int) bool {
+		if overruled[i][0] != overruled[j][0] {
+			return overruled[i][0] < overruled[j][0]
+		}
+		return overruled[i][1] < overruled[j][1]
+	})
+	m.family("parallaxd_prober_overruled_total", "counter", "Scheduled down or warning results that corroboration decided were up, since start.")
+	for _, key := range overruled {
+		m.sample("parallaxd_prober_overruled_total", []string{"prober", key[0], "check", key[1]}, float64(overruledCount[key]))
+	}
 	m.family("parallaxd_prober_mesh_report_age_seconds", "gauge", "Seconds since the prober's last mesh report.")
 	m.family("parallaxd_prober_isolated", "gauge", "1 when the prober reached none of its peers.")
 	m.family("parallaxd_prober_silent", "gauge", "1 when the prober's assigned checks have gone stale.")

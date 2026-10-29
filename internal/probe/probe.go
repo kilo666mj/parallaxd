@@ -37,6 +37,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"time"
 
@@ -292,6 +293,13 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 	for name, value := range c.HTTPHeaders {
 		req.Header.Set(name, value)
 	}
+	// Through a proxy the traced dial and handshake are the proxy's, not the
+	// target's, so naming them would mislead.
+	var phases *httpPhases
+	if proxyRoute == nil {
+		phases = &httpPhases{}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), phases.trace()))
+	}
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -301,6 +309,13 @@ func (h HTTP) Probe(ctx context.Context, c check.Check) (check.Status, time.Dura
 			return check.StatusUnknown, 0, "proxy route could not be established"
 		}
 		status, detail := classify(err)
+		// Only failures that count against the target need locating; the
+		// unknown ones already say why this prober learned nothing.
+		if status == check.StatusDown && phases != nil {
+			if where := phases.describe(); where != "" {
+				detail += " (" + where + ")"
+			}
+		}
 		return status, 0, detail
 	}
 	// The body has been read; a close failure now is not evidence about
