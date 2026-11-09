@@ -20,8 +20,8 @@ github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zI
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
 go.michaelspost.com/mcpkit v0.2.0 h1:yPLKgDtPvYwM3QswkKjgV0hXWF7BTOfijCXl7kZN1Y0=
 go.michaelspost.com/mcpkit v0.2.0/go.mod h1:BtKSPI3IqSyowCfL3h6hQWdd1S8JaDPZWW2VeSkcp3E=
-go.michaelspost.com/oidcrp v0.4.3 h1:9g5HWVphOBAvWzFEAI6tun8Pyow31IZGsub1irIGXsM=
-go.michaelspost.com/oidcrp v0.4.3/go.mod h1:ZPFhlIIhivAYXVgWJSSJ1T6kNkTk1hsltX9pY/ZHVhc=
+go.michaelspost.com/oidcrp v0.4.4 h1:xk+2sNE38BkVJFedXgvvCm8gJ2VOMk1GbIaYC8C8XgM=
+go.michaelspost.com/oidcrp v0.4.4/go.mod h1:yTkVRwFoApO2LwCPqW8i9HBD8fZuXq8H+C4ynkumCbU=
 go.michaelspost.com/tintwire-go v0.4.0 h1:JOjY4zqH3RdlxBSQJJg+dyFH2xQn9iO/s06TGY9EzCI=
 go.michaelspost.com/tintwire-go v0.4.0/go.mod h1:DCrfJsZgTWaKHbEgmQHi7UajqVc1C2836dZQMq4owOo=
 golang.org/x/crypto v0.58.0 h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=
