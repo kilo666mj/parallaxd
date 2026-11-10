@@ -538,8 +538,8 @@ func prepareConfig(cfg config, log *slog.Logger, restoreState bool) (config, *co
 	}
 
 	// The log always gets the alert. A Tintwire destination and its Mattermost
-	// fallback form one logical notifier so the durable outbox cannot later
-	// duplicate an alert that the fallback already accepted.
+	// fallback form one logical notifier. The durable outbox records fallback
+	// acceptance and finishes primary delivery without repeating that fallback.
 	destinationConfigs := make(map[string]notificationDestinationConfig)
 	fallbacks := make(map[string]string)
 	var destinationOrder []string

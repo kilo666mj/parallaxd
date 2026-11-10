@@ -57,6 +57,32 @@ type Delivery struct {
 	LastError   string    `json:"last_error,omitempty"`
 	Escalation  string    `json:"escalation,omitempty"`
 	IncidentID  uint64    `json:"incident_id,omitempty"`
+	// FallbackAccepted prevents repeating an already successful fallback while
+	// the primary destination is unavailable, including after a restart.
+	FallbackAccepted bool `json:"fallback_accepted,omitempty"`
+}
+
+type fallbackAcceptedError struct{ cause error }
+
+func (e *fallbackAcceptedError) Error() string {
+	return fmt.Sprintf("fallback accepted; primary delivery pending: %v", e.cause)
+}
+
+func (e *fallbackAcceptedError) Unwrap() error { return e.cause }
+
+func fallbackAccepted(err error) bool {
+	var accepted *fallbackAcceptedError
+	return errors.As(err, &accepted)
+}
+
+type primaryNotifier interface {
+	NotifyPrimary(context.Context, Alert) error
+}
+
+type primaryDelivery struct{ notifier primaryNotifier }
+
+func (n primaryDelivery) Notify(ctx context.Context, a Alert) error {
+	return n.notifier.NotifyPrimary(ctx, a)
 }
 
 func validateNotificationConfig(cfg Config) error {
@@ -212,7 +238,7 @@ func (c *Coordinator) deliver(ctx context.Context, a Alert) error {
 			c.enqueueDelivery(Delivery{Destination: destination, Alert: a, NextAttempt: c.now().UTC()})
 			continue
 		}
-		if err := c.deliverTo(ctx, destination, a); err != nil {
+		if err := c.deliverTo(ctx, destination, a, false); err != nil {
 			c.enqueueFailedDelivery(destination, a, err)
 			errs = append(errs, destination+": "+err.Error())
 		}
@@ -234,10 +260,17 @@ func (c *Coordinator) destinationPending(destination string) bool {
 	return false
 }
 
-func (c *Coordinator) deliverTo(ctx context.Context, destination string, a Alert) error {
+func (c *Coordinator) deliverTo(ctx context.Context, destination string, a Alert, primaryOnly bool) error {
 	notifier := c.destinations[destination]
 	if notifier == nil {
 		return fmt.Errorf("notification destination %q is unavailable", destination)
+	}
+	if primaryOnly {
+		primary, ok := notifier.(primaryNotifier)
+		if !ok {
+			return fmt.Errorf("notification destination %q cannot resume primary delivery", destination)
+		}
+		notifier = primaryDelivery{notifier: primary}
 	}
 	return c.recordDeliveryAttempt(ctx, destination, notifier, a)
 }
@@ -246,7 +279,7 @@ func (c *Coordinator) enqueueFailedDelivery(destination string, a Alert, deliver
 	now := c.now().UTC()
 	c.enqueueDelivery(Delivery{Destination: destination, Alert: a,
 		NextAttempt: now.Add(c.retryInitial()), Attempts: 1,
-		LastAttempt: now, LastError: deliveryErr.Error()})
+		LastAttempt: now, LastError: deliveryErr.Error(), FallbackAccepted: fallbackAccepted(deliveryErr)})
 }
 
 func (c *Coordinator) enqueueDelivery(delivery Delivery) {
@@ -317,7 +350,7 @@ func (c *Coordinator) processDeliveries(ctx context.Context) {
 			c.persist()
 			continue
 		}
-		err := c.deliverTo(ctx, item.Destination, item.Alert)
+		err := c.deliverTo(ctx, item.Destination, item.Alert, item.FallbackAccepted)
 		attemptedAt := c.now().UTC()
 		c.mu.Lock()
 		for i := range c.outbox {
@@ -327,6 +360,7 @@ func (c *Coordinator) processDeliveries(ctx context.Context) {
 			if err == nil {
 				c.outbox = append(c.outbox[:i], c.outbox[i+1:]...)
 			} else {
+				c.outbox[i].FallbackAccepted = item.FallbackAccepted || fallbackAccepted(err)
 				c.outbox[i].Attempts++
 				c.outbox[i].LastAttempt = attemptedAt
 				c.outbox[i].LastError = err.Error()
