@@ -1,5 +1,22 @@
 # Recurring operations
 
+## Notification delivery and fallback
+
+The coordinator keeps failed notification deliveries in its persisted outbox.
+If a Tintwire destination falls back successfully to Mattermost, the outbox
+retains the update until Tintwire accepts it. Retries after that fallback use
+Tintwire only, avoiding repeated Mattermost messages. Pending updates keep their
+original order and fallback acceptance survives coordinator restart and HA
+replication, so a delayed firing update cannot overwrite a newer recovery.
+
+While Tintwire is unavailable, notification diagnostics continue to show pending
+primary delivery even when Mattermost has accepted the alert. Both-destination
+failures still retry with fallback enabled until it succeeds. This applies to
+coordinator alerts; standalone assurance hooks have their own delivery lifecycle.
+
+Recovery messages accepted only by fallback before this behavior was installed
+are not in the outbox. They require reconciliation from verified incident state.
+
 ## Automated assurance
 
 `ansible/operations.yml` installs checks independently of application deployment:

@@ -14,12 +14,12 @@ import (
 
 type tintwirePublisher interface {
 	Publish(context.Context, tintwire.Card) (tintwire.Result, error)
+	PublishPrimary(context.Context, tintwire.Card) (tintwire.Result, error)
 }
 
 // TintwireNotifier translates a decided alert into a native Tintwire card.
-// The client owns Mattermost failover policy; parallaxd's durable outbox sees
-// the pair as one logical destination and retries only when neither accepted
-// the notification.
+// The client owns Mattermost failover policy. A successful fallback leaves
+// primary delivery pending in the durable outbox so lifecycle cards converge.
 type TintwireNotifier struct {
 	Client  tintwirePublisher
 	Channel string
@@ -35,11 +35,24 @@ func (n TintwireNotifier) Notify(ctx context.Context, alert Alert) error {
 	if err != nil {
 		return err
 	}
-	if result.Destination == tintwire.DestinationMattermost && n.Log != nil {
-		n.Log.Warn("Tintwire delivery used Mattermost fallback",
-			"subject", alert.Subject(), "kind", string(alert.Kind), "tintwire_error", result.PrimaryError)
+	if result.Destination == tintwire.DestinationMattermost {
+		if n.Log != nil {
+			n.Log.Warn("Tintwire delivery used Mattermost fallback; primary delivery pending",
+				"subject", alert.Subject(), "kind", string(alert.Kind), "tintwire_error", result.PrimaryError)
+		}
+		return &fallbackAcceptedError{cause: result.PrimaryError}
 	}
 	return nil
+}
+
+// NotifyPrimary completes an update already accepted by Mattermost without
+// sending duplicate fallback messages on each durable retry.
+func (n TintwireNotifier) NotifyPrimary(ctx context.Context, alert Alert) error {
+	if n.Client == nil {
+		return fmt.Errorf("tintwire notifier needs a client")
+	}
+	_, err := n.Client.PublishPrimary(ctx, tintwireCard(alert, n.Channel, n.Source))
+	return err
 }
 
 func tintwireCard(alert Alert, channel, source string) tintwire.Card {

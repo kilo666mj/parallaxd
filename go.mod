@@ -9,7 +9,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.michaelspost.com/mcpkit v0.2.0
 	go.michaelspost.com/oidcrp v0.4.4
-	go.michaelspost.com/tintwire-go v0.4.0
+	go.michaelspost.com/tintwire-go v0.5.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
 	google.golang.org/grpc v1.85.0
