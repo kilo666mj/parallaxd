@@ -2,7 +2,7 @@ module github.com/kilo666mj/parallaxd
 
 go 1.27.1
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/go-jose/go-jose/v4 v4.1.9
