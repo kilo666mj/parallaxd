@@ -22,8 +22,8 @@ go.michaelspost.com/mcpkit v0.2.0 h1:yPLKgDtPvYwM3QswkKjgV0hXWF7BTOfijCXl7kZN1Y0
 go.michaelspost.com/mcpkit v0.2.0/go.mod h1:BtKSPI3IqSyowCfL3h6hQWdd1S8JaDPZWW2VeSkcp3E=
 go.michaelspost.com/oidcrp v0.4.5 h1:U9/FlIGQMbGrOLizkPdn4Bbw7bU8a/TpJsMCquQN2J4=
 go.michaelspost.com/oidcrp v0.4.5/go.mod h1:u2snHDd7IlyiPD8WhVShj2KdM5v7s7wxNzOcoutcURs=
-go.michaelspost.com/tintwire-go v0.5.0 h1:7mO5Nv5nb5HKvRZY5CJ/3OaggAB8ByRbk4/h8hkwnwU=
-go.michaelspost.com/tintwire-go v0.5.0/go.mod h1:DCrfJsZgTWaKHbEgmQHi7UajqVc1C2836dZQMq4owOo=
+go.michaelspost.com/tintwire-go v0.5.1 h1:KI6nxl8gV9NHYaukx5Z2TEiziPZi3JmE3+CbffIZvq0=
+go.michaelspost.com/tintwire-go v0.5.1/go.mod h1:DCrfJsZgTWaKHbEgmQHi7UajqVc1C2836dZQMq4owOo=
 golang.org/x/crypto v0.59.0 h1:xS2jhqYbzNrpvkWP2YTDf4TJwBy3ykR03i8vFDxEc7c=
 golang.org/x/crypto v0.59.0/go.mod h1:veDyUwATGs3c+vN3VfTbzViMGXeTBk3WyhBOkn+F/4U=
 golang.org/x/net v0.63.0 h1:HCoTmNh9EpD1PpK8gBNFY4gcTY4N+KQEO8ylfIKqFJ0=
